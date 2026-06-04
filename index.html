@@ -2008,6 +2008,93 @@ function downloadGameDayHTMLForLineup({ grid, roster, innings, gameMeta }) {
 }
 
 // ══════════════════════════════════════════════════
+// SHAREABLE LINK
+// Encodes the same payload the Gameday HTML export uses (roster mini-snapshot
+// + per-inning grid + meta + innings) into the URL fragment as base64url-
+// encoded JSON, so the recipient sees exactly what was finalized regardless
+// of whether the deployed team-data.json has caught up. At boot, if the
+// hash matches #share=..., we render the Gameday HTML viewer in place of
+// the app (see the share-boot block near the bottom of this file).
+// ══════════════════════════════════════════════════
+function buildSharePayload({ grid, roster, innings, gameMeta }) {
+  const meta = gameMeta || {};
+  const slug = (s) => (s || "").toString().trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  const datePart = meta.date || new Date().toISOString().slice(0, 10);
+  const oppSlug = slug(meta.opponent);
+  const gameId = ["game", datePart, oppSlug].filter(Boolean).join("-");
+  const playerMini = (p) => ({ id: p.id, name: p.name, number: p.number, positionMap: p.positionMap });
+  return {
+    gameId,
+    meta: {
+      date: meta.date || null,
+      opponent: meta.opponent || null,
+      gameType: meta.gameType || null,
+    },
+    innings,
+    roster: roster.map(playerMini),
+    grid,
+  };
+}
+
+function encodeSharePayload(payload) {
+  const json = JSON.stringify(payload);
+  // utf-8 safe btoa
+  const b64 = btoa(unescape(encodeURIComponent(json)));
+  // base64url
+  return b64.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function decodeSharePayload(encoded) {
+  if (!encoded) return null;
+  try {
+    let b64 = encoded.replace(/-/g, "+").replace(/_/g, "/");
+    const pad = b64.length % 4;
+    if (pad) b64 += "=".repeat(4 - pad);
+    const json = decodeURIComponent(escape(atob(b64)));
+    return JSON.parse(json);
+  } catch { return null; }
+}
+
+function buildShareUrl(args) {
+  const payload = buildSharePayload(args);
+  const encoded = encodeSharePayload(payload);
+  const base = window.location.origin + window.location.pathname + window.location.search;
+  return base + "#share=" + encoded;
+}
+
+async function copyShareLinkForLineup(args) {
+  const url = buildShareUrl(args);
+  try {
+    await navigator.clipboard.writeText(url);
+    return { ok: true, url };
+  } catch {
+    return { ok: false, url };
+  }
+}
+
+// Standalone "Copy share link" button used by the Lineups list card, where
+// there's no surrounding component-level state to hold the "Link copied"
+// confirmation. The LineupTab + saved modal use inline state instead.
+function ShareLinkButton({ args, style }) {
+  const [state, setState] = useState("idle");
+  const onClick = async () => {
+    const { ok, url } = await copyShareLinkForLineup(args);
+    if (ok) {
+      setState("ok");
+      setTimeout(() => setState("idle"), 1800);
+    } else {
+      window.prompt("Copy this share link:", url);
+    }
+  };
+  return (
+    <button onClick={onClick} style={style || {
+      background: C.surface, border: `1px solid ${C.border}`, color: C.text,
+      padding: "8px 16px", borderRadius: 6, fontFamily: FONT, fontSize: 13, fontWeight: 500, cursor: "pointer",
+    }}>{state === "ok" ? "Link copied" : "Copy share link"}</button>
+  );
+}
+
+// ══════════════════════════════════════════════════
 // LOGIN SCREEN
 // Magic-link auth: enter email → click link in inbox → signed in.
 // ══════════════════════════════════════════════════
@@ -4305,6 +4392,8 @@ function LineupListView({ schedule, roster, onEditEntry, onOpenGameDay = () => {
                   background: C.surface, border: `1px solid ${C.border}`, color: C.text,
                   padding: "8px 16px", borderRadius: 6, fontFamily: FONT, fontSize: 13, fontWeight: 500, cursor: "pointer",
                 }}>Download Gameday HTML</button>
+                <ShareLinkButton args={{ grid, roster, innings, gameMeta }} />
+
               </div>
             </div>
           );
@@ -4558,6 +4647,22 @@ function LineupTab({ grid, setGrid, posHistory, benchCount, roster, fullRoster, 
   // export saved games without entering the editor.
   const handleDownloadPNG = () => {
     downloadPNGForLineup({ grid, posHistory, roster, innings, gameMeta });
+  };
+
+  // Copy a self-contained share link to the clipboard. The link carries
+  // the lineup payload in its #share=... fragment, so the recipient sees
+  // the finalized lineup even if team-data.json on the server is stale.
+  const [shareCopyState, setShareCopyState] = useState("idle"); // idle | ok | err
+  const handleCopyShareLink = async () => {
+    const { ok, url } = await copyShareLinkForLineup({ grid, roster, innings, gameMeta });
+    if (ok) {
+      setShareCopyState("ok");
+      setTimeout(() => setShareCopyState("idle"), 1800);
+    } else {
+      setShareCopyState("err");
+      window.prompt("Copy this share link:", url);
+      setTimeout(() => setShareCopyState("idle"), 1800);
+    }
   };
 
   // Export the complete lineup as a structured JSON file. Includes game metadata,
@@ -4869,6 +4974,9 @@ function LineupTab({ grid, setGrid, posHistory, benchCount, roster, fullRoster, 
                 </span>
                 <button onClick={handleExportGameDay} style={{ ...chipStyle, padding: "6px 14px", fontWeight: 600, fontSize: 12 }}>Download Gameday HTML</button>
                 <button onClick={handleDownloadPNG} style={{ ...chipStyle, background: pngBg, color: "#fff", borderColor: pngBg, padding: "6px 14px", fontWeight: 600, fontSize: 12 }}>Download PNG</button>
+                <button onClick={handleCopyShareLink} style={{ ...chipStyle, padding: "6px 14px", fontWeight: 600, fontSize: 12 }}>
+                  {shareCopyState === "ok" ? "Link copied" : "Copy share link"}
+                </button>
               </div>
             )}
           </div>
@@ -5246,6 +5354,9 @@ function LineupTab({ grid, setGrid, posHistory, benchCount, roster, fullRoster, 
             <div style={{ display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap", marginBottom: 22 }}>
               <button onClick={handleExportGameDay} style={{ ...chipStyle, padding: "10px 20px", fontWeight: 600, fontSize: 13 }}>Download HTML</button>
               <button onClick={handleDownloadPNG} style={{ ...chipStyle, padding: "10px 20px", fontWeight: 600, fontSize: 13 }}>Download PNG</button>
+              <button onClick={handleCopyShareLink} style={{ ...chipStyle, padding: "10px 20px", fontWeight: 600, fontSize: 13 }}>
+                {shareCopyState === "ok" ? "Link copied" : "Copy share link"}
+              </button>
             </div>
             <button onClick={() => setSavedModalOpen(false)} style={{
               background: C.accent, border: `1px solid ${C.accent}`, color: "#fff",
@@ -6349,7 +6460,38 @@ function ScheduleEditorModal({ mode, kind, date, opponent, setOpponent, homeAway
   );
 }
 
-ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+// If the URL carries a #share=... fragment, treat this page load as a
+// read-only viewer: decode the payload and host the Gameday HTML template
+// inside a fullscreen iframe so its inline scripts run in their own
+// document. The viewer is self-contained — it never touches localStorage
+// or fetches team-data.json, so a stale deploy can't hide a freshly-
+// shared lineup. The original hash URL stays intact, so the link is
+// bookmarkable and re-shareable.
+(function bootShareViewerIfNeeded() {
+  const m = /(?:^|[#&])share=([^&]+)/.exec(window.location.hash || "");
+  if (!m) return false;
+  const payload = decodeSharePayload(m[1]);
+  if (!payload || !Array.isArray(payload.grid) || !Array.isArray(payload.roster)) return false;
+  const meta = payload.meta || {};
+  const titleParts = ["Lineup"];
+  if (meta.opponent) titleParts.push("vs " + meta.opponent);
+  if (meta.date) titleParts.push("— " + meta.date);
+  const title = titleParts.join(" ").replace(/[<>&]/g, c => ({"<":"&lt;",">":"&gt;","&":"&amp;"}[c]));
+  const tmpl = atob(GAME_DAY_TEMPLATE_B64);
+  const html = tmpl
+    .replace("__GAME_TITLE__", title)
+    .replace("__GAME_DATA__", JSON.stringify(payload));
+  const root = document.getElementById("root");
+  if (root) root.remove();
+  document.title = "Lineup";
+  document.body.style.margin = "0";
+  const frame = document.createElement("iframe");
+  frame.setAttribute("title", "Shared lineup");
+  frame.style.cssText = "position:fixed;inset:0;border:0;width:100vw;height:100vh;background:#fff;";
+  frame.srcdoc = html;
+  document.body.appendChild(frame);
+  return true;
+})() || ReactDOM.createRoot(document.getElementById("root")).render(<App />);
   </script>
 </body>
 </html>
