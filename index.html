@@ -3253,14 +3253,111 @@ function PriorityMatrix({ roster, setRoster, benchTiers, setBenchTiers }) {
   );
 }
 
+// Day-granularity helpers backing the Usage Report's range slider, which
+// operates on integer day offsets from a base date rather than raw strings.
+const MS_PER_DAY = 86400000;
+function dateToDayIndex(dateStr, baseStr) {
+  return Math.round((new Date(dateStr + "T12:00:00") - new Date(baseStr + "T12:00:00")) / MS_PER_DAY);
+}
+function dayIndexToDate(idx, baseStr) {
+  const d = new Date(baseStr + "T12:00:00");
+  d.setDate(d.getDate() + idx);
+  return d.toISOString().slice(0, 10);
+}
+function formatShortDate(dateStr) {
+  return new Date(dateStr + "T12:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+// Two-handle range slider. Operates on plain integers (day offsets) — the
+// caller maps to/from real dates. Dragging either handle narrows the window;
+// clicking the track jumps whichever handle is closer to that point.
+function DualRangeSlider({ min, max, value, onChange }) {
+  const trackRef = useRef(null);
+  const [dragging, setDragging] = useState(null); // "lo" | "hi" | null
+
+  const clamp = (v) => Math.min(max, Math.max(min, v));
+  const pct = (v) => (max === min ? 0 : ((v - min) / (max - min)) * 100);
+
+  const valueFromClientX = (clientX) => {
+    const rect = trackRef.current.getBoundingClientRect();
+    const ratio = rect.width === 0 ? 0 : (clientX - rect.left) / rect.width;
+    return clamp(Math.round(min + ratio * (max - min)));
+  };
+
+  const moveTo = (which, clientX) => {
+    const v = valueFromClientX(clientX);
+    if (which === "lo") onChange([Math.min(v, value[1]), value[1]]);
+    else onChange([value[0], Math.max(v, value[0])]);
+  };
+
+  useEffect(() => {
+    if (!dragging) return;
+    const onMove = (e) => moveTo(dragging, e.clientX);
+    const onUp = () => setDragging(null);
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+  }, [dragging, value[0], value[1]]);
+
+  const onTrackDown = (e) => {
+    const v = valueFromClientX(e.clientX);
+    const which = Math.abs(v - value[0]) <= Math.abs(v - value[1]) ? "lo" : "hi";
+    setDragging(which);
+    moveTo(which, e.clientX);
+  };
+
+  const nudge = (which, dir) => {
+    if (which === "lo") onChange([clamp(value[0] + dir), value[1]]);
+    else onChange([value[0], clamp(value[1] + dir)]);
+  };
+
+  const loPct = pct(value[0]), hiPct = pct(value[1]);
+  const thumbStyle = (leftPct) => ({
+    position: "absolute", top: "50%", left: `${leftPct}%`, width: 16, height: 16, borderRadius: "50%",
+    background: C.accent, border: `2px solid ${C.surface}`, boxShadow: "0 1px 3px rgba(0,0,0,0.35)",
+    transform: "translate(-50%, -50%)", cursor: "grab", touchAction: "none",
+  });
+
+  return (
+    <div ref={trackRef} style={{ position: "relative", height: 20, flex: 1, minWidth: 120, touchAction: "none" }}
+      onPointerDown={onTrackDown}>
+      <div style={{ position: "absolute", top: "50%", left: 0, right: 0, height: 4, borderRadius: 2, background: C.border, transform: "translateY(-50%)" }} />
+      <div style={{ position: "absolute", top: "50%", left: `${loPct}%`, width: `${hiPct - loPct}%`, height: 4, borderRadius: 2, background: C.accent, transform: "translateY(-50%)" }} />
+      <div role="slider" aria-label="Range start" tabIndex={0} aria-valuemin={min} aria-valuemax={max} aria-valuenow={value[0]}
+        onPointerDown={e => { e.stopPropagation(); setDragging("lo"); }}
+        onKeyDown={e => { if (e.key === "ArrowLeft") nudge("lo", -1); if (e.key === "ArrowRight") nudge("lo", 1); }}
+        style={thumbStyle(loPct)} />
+      <div role="slider" aria-label="Range end" tabIndex={0} aria-valuemin={min} aria-valuemax={max} aria-valuenow={value[1]}
+        onPointerDown={e => { e.stopPropagation(); setDragging("hi"); }}
+        onKeyDown={e => { if (e.key === "ArrowLeft") nudge("hi", -1); if (e.key === "ArrowRight") nudge("hi", 1); }}
+        style={thumbStyle(hiPct)} />
+    </div>
+  );
+}
+
 // ══════════════════════════════════════════════════
 // ROSTER TAB
 // ══════════════════════════════════════════════════
 function RosterTab({ roster, setRoster, schedule = [], pitchLogs = [], setPitchLogs = () => {}, benchTiers = {}, setBenchTiers = () => {} }) {
-  // Date range for the Usage Report. Empty = whole season (no bound on that
-  // side). Both bounds are inclusive ISO date strings (YYYY-MM-DD).
-  const [usageStart, setUsageStart] = useState("");
-  const [usageEnd,   setUsageEnd]   = useState("");
+  // The Usage Report's selectable window is bounded to the season itself —
+  // May 1 through Aug 31 of whatever year the schedule's games fall in
+  // (falls back to the current year if the schedule is empty).
+  const seasonYear = useMemo(() => {
+    const years = schedule.filter(g => g && g.date).map(g => Number(g.date.slice(0, 4)));
+    return years.length ? Math.min(...years) : new Date().getFullYear();
+  }, [schedule]);
+  const SEASON_MIN = `${seasonYear}-05-01`;
+  const SEASON_MAX = `${seasonYear}-08-31`;
+  // Date range for the Usage Report. Both bounds are inclusive ISO date
+  // strings (YYYY-MM-DD), defaulting to the full season.
+  const [usageStart, setUsageStart] = useState(SEASON_MIN);
+  const [usageEnd,   setUsageEnd]   = useState(SEASON_MAX);
+  const totalDays = dateToDayIndex(SEASON_MAX, SEASON_MIN);
+  const startIdx = Math.min(totalDays, Math.max(0, dateToDayIndex(usageStart, SEASON_MIN)));
+  const endIdx = Math.min(totalDays, Math.max(0, dateToDayIndex(usageEnd, SEASON_MIN)));
   // When true, future games with saved lineups are folded into the heatmap
   // alongside played games — useful for seeing how a season-wide plan
   // distributes innings across players. Defaults to true since the
@@ -3400,42 +3497,48 @@ function RosterTab({ roster, setRoster, schedule = [], pitchLogs = [], setPitchL
           read-only and we want the whole grid on screen at once. */}
       <div style={{ marginBottom: 28 }}>
         {sectionHeader("Usage Report", "Innings each player has played at each position across saved lineups. Toggles let you fold in future planned games and switch the cell display between totals and averages per game.")}
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, flexWrap: "wrap" }}>
-          <span style={{ fontSize: 12, color: C.textMuted, fontWeight: 500 }}>Range:</span>
-          <input type="date" value={usageStart} onChange={e => setUsageStart(e.target.value)}
-            style={{ background: C.surfaceAlt, border: `1px solid ${C.border}`, color: C.text, padding: "3px 8px", borderRadius: 6, fontFamily: FONT, fontSize: 12, outline: "none" }} />
-          <span style={{ fontSize: 12, color: C.textMuted }}>to</span>
-          <input type="date" value={usageEnd} onChange={e => setUsageEnd(e.target.value)}
-            style={{ background: C.surfaceAlt, border: `1px solid ${C.border}`, color: C.text, padding: "3px 8px", borderRadius: 6, fontFamily: FONT, fontSize: 12, outline: "none" }} />
-          {(usageStart || usageEnd) && (
-            <button onClick={() => { setUsageStart(""); setUsageEnd(""); }}
-              style={{ ...miniChipStyle, fontSize: 11, padding: "3px 10px" }}>Whole season</button>
-          )}
-          <button onClick={() => setIncludeProjected(v => !v)}
-            title="Fold innings from future games that have a saved lineup into the heatmap"
-            style={{
-              ...miniChipStyle, fontSize: 11, padding: "3px 10px",
-              background: includeProjected ? C.accent : C.surface,
-              color: includeProjected ? "#fff" : C.textMuted,
-              borderColor: includeProjected ? C.accent : C.border,
-            }}>
-            {includeProjected ? "✓ " : ""}Include projected
-          </button>
-          <button onClick={() => setShowAverage(v => !v)}
-            title="Show innings per game (cell ÷ N games included) instead of raw totals"
-            style={{
-              ...miniChipStyle, fontSize: 11, padding: "3px 10px",
-              background: showAverage ? C.accent : C.surface,
-              color: showAverage ? "#fff" : C.textMuted,
-              borderColor: showAverage ? C.accent : C.border,
-            }}>
-            {showAverage ? "✓ " : ""}Avg per game
-          </button>
-          <span style={{ fontSize: 11, color: C.textMuted, marginLeft: "auto" }}>
-            {includeProjected
-              ? `${playedGames.length} played + ${projectedGames.length} projected`
-              : `${playedGames.length} ${playedGames.length === 1 ? "game" : "games"} included`}
-          </span>
+        <div style={{ marginBottom: 10 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" }}>
+            <span style={{ fontSize: 12, color: C.textMuted, fontWeight: 500, whiteSpace: "nowrap" }}>Range:</span>
+            <span style={{ fontSize: 11, color: C.textMuted, whiteSpace: "nowrap" }}>{formatShortDate(SEASON_MIN)}</span>
+            <DualRangeSlider min={0} max={totalDays} value={[startIdx, endIdx]}
+              onChange={([s, e]) => { setUsageStart(dayIndexToDate(s, SEASON_MIN)); setUsageEnd(dayIndexToDate(e, SEASON_MIN)); }} />
+            <span style={{ fontSize: 11, color: C.textMuted, whiteSpace: "nowrap" }}>{formatShortDate(SEASON_MAX)}</span>
+            <span style={{ fontSize: 12, color: C.text, fontWeight: 600, whiteSpace: "nowrap" }}>
+              {formatShortDate(usageStart)} – {formatShortDate(usageEnd)}
+            </span>
+            {(usageStart !== SEASON_MIN || usageEnd !== SEASON_MAX) && (
+              <button onClick={() => { setUsageStart(SEASON_MIN); setUsageEnd(SEASON_MAX); }}
+                style={{ ...miniChipStyle, fontSize: 11, padding: "3px 10px" }}>Whole season</button>
+            )}
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <button onClick={() => setIncludeProjected(v => !v)}
+              title="Fold innings from future games that have a saved lineup into the heatmap"
+              style={{
+                ...miniChipStyle, fontSize: 11, padding: "3px 10px",
+                background: includeProjected ? C.accent : C.surface,
+                color: includeProjected ? "#fff" : C.textMuted,
+                borderColor: includeProjected ? C.accent : C.border,
+              }}>
+              {includeProjected ? "✓ " : ""}Include projected
+            </button>
+            <button onClick={() => setShowAverage(v => !v)}
+              title="Show innings per game (cell ÷ N games included) instead of raw totals"
+              style={{
+                ...miniChipStyle, fontSize: 11, padding: "3px 10px",
+                background: showAverage ? C.accent : C.surface,
+                color: showAverage ? "#fff" : C.textMuted,
+                borderColor: showAverage ? C.accent : C.border,
+              }}>
+              {showAverage ? "✓ " : ""}Avg per game
+            </button>
+            <span style={{ fontSize: 11, color: C.textMuted, marginLeft: "auto" }}>
+              {includeProjected
+                ? `${playedGames.length} played + ${projectedGames.length} projected`
+                : `${playedGames.length} ${playedGames.length === 1 ? "game" : "games"} included`}
+            </span>
+          </div>
         </div>
         <div style={{ overflowX: "auto", borderRadius: 8, boxShadow: "0 1px 4px rgba(0,0,0,0.06)", background: C.surface }}>
           <table style={{ width: "auto", borderCollapse: "collapse", background: C.surface, borderRadius: 8 }}>
