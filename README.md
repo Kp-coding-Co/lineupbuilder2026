@@ -1,6 +1,6 @@
 # Jacks 11U AA Lineup System
 
-Browser app for managing the Jacks 11U AA team's roster, schedule, lineups, pitch counts, and arm care. Single self-contained HTML file, no backend, no build step. Team data lives in browser `localStorage` per device, with a lightweight "publish via the repo" path for sharing with co-coaches.
+Browser app for managing the Jacks 11U AA team's roster, schedule, lineups, pitch counts, and arm care. Single self-contained HTML file, no build step. Multi-user access is powered by a Supabase project: coaches sign in with a magic link and share one live `team_data` row, so changes made by one coach show up for everyone else. `localStorage` is still used as an offline cache per device, and a lightweight "publish via the repo" path remains available as a manual fallback.
 
 **Live site:** <https://kp-coding-co.github.io/lineupbuilder2026/>
 
@@ -30,9 +30,26 @@ Every push to `main` redeploys within ~30 seconds. No build step, no deploy quot
 
 The app is a single self-contained HTML file (`index.html`) with React + Babel-standalone loaded via CDN. To make changes, edit `index.html` and reload — no compile or install step.
 
-## Sharing data with co-coaches
+## Multi-user access (Supabase)
 
-The app is single-device by default (localStorage), but ships with a lightweight "publish via the repo" mechanism so the head coach can broadcast their roster, schedule, lineups, and pitch logs to anyone using the deployed site.
+`REQUIRE_AUTH` (near the top of `index.html`) is `true`, so the app requires sign-in and syncs to a shared Supabase `team_data` row instead of per-device `localStorage`. Every signed-in coach reads and writes the same roster, schedule, lineups, and pitch logs — no manual export/import needed.
+
+**One-time setup (done once per team, in the Supabase dashboard for the project referenced by `SUPABASE_URL`):**
+
+1. **Custom SMTP** — Supabase's built-in email sender is capped at 4 magic-links/hour, too low for a team. Under **Project Settings → Auth → SMTP Settings**, wire up a provider (e.g. [Resend](https://resend.com)'s free tier) so login emails aren't rate-limited.
+2. **Allowlist each coach** — only emails in the `allowed_emails` table can sign in. In the Supabase SQL editor:
+   ```sql
+   insert into public.allowed_emails (email) values ('coach@example.com');
+   ```
+3. **Sign in** — each coach visits the deployed site, enters their email, and clicks the magic link sent to their inbox.
+
+The first coach to sign in with an empty cloud row gets an "import to cloud" banner offering to push their local data up as the shared baseline; after that, everyone's edits sync automatically.
+
+To go back to local-only (no login, no cloud sync) for fast iteration, flip `REQUIRE_AUTH` back to `false` in `index.html`.
+
+## Sharing data with co-coaches (manual fallback)
+
+This mechanism predates the Supabase sync above and still works as a manual override — useful for offline sharing or a one-off snapshot outside the live sync.
 
 **The mechanism:** a `team-data.json` file lives in the repo root and is served alongside `index.html`. On every page load the app fetches it. If its `publishedAt` timestamp is newer than what the visitor has applied locally, a banner appears: *"New team data published [date]. Apply it? [Apply] [Skip]"*. **Apply** overwrites the visitor's localStorage with the snapshot and reloads. **Skip** suppresses the banner until you publish a newer version.
 
@@ -90,6 +107,4 @@ The modal also shows two timestamps: when you last applied a snapshot locally, a
 
 ## Data persistence
 
-State (roster, schedule, lineups, pitch logs, bench tiers) lives in browser `localStorage` per device. The `team-data.json` mechanism is what bridges devices — there is no backend.
-
-If you want real multi-device editing later, flip `REQUIRE_AUTH = true` near the top of `index.html` to re-enable the (currently dormant) Supabase magic-link auth + cloud sync. Set up custom SMTP first — see `HANDOFF.md`.
+State (roster, schedule, lineups, pitch logs, bench tiers) syncs to a shared Supabase `team_data` row when signed in (see **Multi-user access** above), with `localStorage` as an offline-per-device cache. The `team-data.json` mechanism remains available as a manual, no-login fallback for bridging devices.

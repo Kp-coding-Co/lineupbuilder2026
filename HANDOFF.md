@@ -151,7 +151,7 @@ Single-row table. Columns are JSONB blobs: `roster`, `schedule`, `pitch_logs`, `
 
 ## TBDs / open work
 
-- **Auth**: `REQUIRE_AUTH = false`. Flip to `true` and **set up custom SMTP in Supabase** (Resend free tier or similar) before inviting other coaches — built-in email is rate-limited to 4/hour per project.
+- **Auth**: `REQUIRE_AUTH = true` — sign-in is required and cloud sync is live. **Custom SMTP in Supabase** (Resend free tier or similar) must be configured before inviting other coaches — built-in email is rate-limited to 4/hour per project. Flip back to `false` for local-only dev iteration.
 - **Allowlist**: Currently only `peterson.ken12@gmail.com`. Add other coaches via:
   ```sql
   insert into public.allowed_emails (email) values ('coach@example.com');
