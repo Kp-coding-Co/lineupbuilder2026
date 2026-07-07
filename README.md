@@ -1,6 +1,6 @@
 # Jacks 11U AA Lineup System
 
-Browser app for managing the Jacks 11U AA team's roster, schedule, lineups, pitch counts, and arm care. Single self-contained HTML file, no backend, no build step. Team data lives in browser `localStorage` per device, with a lightweight "publish via the repo" path for sharing with co-coaches.
+Browser app for managing the Jacks 11U AA team's roster, schedule, lineups, pitch counts, and arm care. Single self-contained HTML file, no build step. Team data lives in a shared Supabase row — anyone with the link sees the same live roster/schedule/lineups, no login required. A handful of "goes live for every coach" actions are gated by a shared passphrase plus a confirmation step; everything else is open.
 
 **Live site:** <https://kp-coding-co.github.io/lineupbuilder2026/>
 
@@ -32,64 +32,33 @@ The app is a single self-contained HTML file (`index.html`) with React + Babel-s
 
 ## Sharing data with co-coaches
 
-The app is single-device by default (localStorage), but ships with a lightweight "publish via the repo" mechanism so the head coach can broadcast their roster, schedule, lineups, and pitch logs to anyone using the deployed site.
+No login. Anyone with the site link sees the live shared roster, schedule, lineups, and pitch logs — the app hydrates from a single Supabase row on load. There's no more "download a file, send it, upload it" step.
 
-**The mechanism:** a `team-data.json` file lives in the repo root and is served alongside `index.html`. On every page load the app fetches it. If its `publishedAt` timestamp is newer than what the visitor has applied locally, a banner appears: *"New team data published [date]. Apply it? [Apply] [Skip]"*. **Apply** overwrites the visitor's localStorage with the snapshot and reloads. **Skip** suppresses the banner until you publish a newer version.
+**Editing is gated, not login-walled.** A short list of actions that go live for every coach immediately are protected by a shared passphrase plus an explicit "this will be visible to all coaches" confirmation, re-prompted every time (nothing is remembered between prompts):
 
-### Head coach workflow (you publish)
+- Finalizing (locking) or unlocking a lineup
+- Saving Roster Priority changes (the Roster tab batches position/bench-tier edits into a draft — nothing goes out until you click **Save Changes**)
+- Generating a lineup from the Setup tab
+- Restoring a backup JSON file, or bootstrapping a device's local data into the cloud
 
-1. Make your changes in the app as normal — schedule games, build lineups, log pitches.
-2. Click the **⚙** icon in the header → **Download team-data.json**.
-3. Upload that file to the repo root (overwrite the existing `team-data.json`) via the GitHub web UI's "Upload files" → drag-and-drop → commit.
-4. GitHub Pages updates within ~30 seconds.
-5. Co-coaches refresh, see the banner, click Apply.
+Everything else — viewing, adding/editing the schedule, swapping players in an unfinalized lineup, logging pitches — is open to anyone, no prompt.
 
-### Co-coach workflow (they view)
-
-1. Visit the deployed site.
-2. On first visit, or whenever you publish, a banner offers to apply the latest team data. Click **Apply**.
-3. They're now looking at the same roster, schedule, and lineups you published. They can navigate freely, run reports, and play with hypothetical lineups locally — those local edits stay on their device and don't propagate back.
-
-### Importing a coach's suggested changes
-
-If a co-coach wants to suggest changes (e.g. they exported their JSON after playing with hypothetical lineups):
-
-1. Have them click **⚙ → Download team-data.json** and send you the file.
-2. On your device, click **⚙ → Choose file…** and pick their file. The app prompts for confirmation, then replaces your localStorage with theirs and reloads.
-3. Review. If you want to broadcast it, click **⚙ → Download team-data.json** again and upload it to the repo.
+This is a soft speed bump, not real security: the passphrase check lives in the page's own JavaScript, so it's visible to anyone who looks at the page source. It's there to stop accidental edits and add a moment's pause before something goes out to the whole team, not to keep a determined person out.
 
 ### The ⚙ menu
 
-- **Download team-data.json** — exports your current view as a JSON snapshot.
-- **Choose file…** — imports a JSON file (typically one a coach sent you), overwriting your local view.
-- **Sync now** — re-fetches `team-data.json` from the deployed site and offers to apply it. Useful if you skipped an earlier banner.
+Settings now only holds a manual backup tool, independent of the live sync:
 
-The modal also shows two timestamps: when you last applied a snapshot locally, and the current `publishedAt` on the server.
-
-### `team-data.json` format
-
-```json
-{
-  "publishedAt": 1714752000000,
-  "roster": [ ... ],
-  "schedule": [ ... ],
-  "pitchLogs": [ ... ],
-  "benchTiers": { ... }
-}
-```
-
-`publishedAt` is a Unix milliseconds timestamp set at export time. The app uses it to decide whether the snapshot is newer than what the visitor has locally.
+- **Download team-data.json** — exports the current shared data as a JSON snapshot, for your own safekeeping.
+- **Choose file…** — restores a backup JSON file, overwriting the shared cloud data for every coach. Gated by the passphrase + confirmation.
 
 ## Files
 
 - `index.html` — the app
-- `team-data.json` — the published team snapshot (created on your first Export). Not in the repo until you publish.
 - `archive/` — older versions, design mocks, and sample game-day exports kept for reference
 - `HANDOFF.md` — engineering handoff doc: data model, code locations, anti-footguns
 - `NEXT_PHASE_BRIEF.md` — brief for a future Vite/normalized-DB rebuild. Kept for reference; not pursued.
 
 ## Data persistence
 
-State (roster, schedule, lineups, pitch logs, bench tiers) lives in browser `localStorage` per device. The `team-data.json` mechanism is what bridges devices — there is no backend.
-
-If you want real multi-device editing later, flip `REQUIRE_AUTH = true` near the top of `index.html` to re-enable the (currently dormant) Supabase magic-link auth + cloud sync. Set up custom SMTP first — see `HANDOFF.md`.
+The shared source of truth is a single row in a Supabase table (`team_data`), read by everyone on load and written by the `load`/`save` layer in `index.html`. Every write also mirrors to the browser's `localStorage` as an offline-friendly cache. There's no login — the Supabase anon key is public by design, and the passphrase gate described above is enforced client-side only. See `HANDOFF.md` for the one-time Supabase RLS setup this depends on.
