@@ -18,10 +18,20 @@ Single-file (`index.html`) React app for managing an 11U baseball team's roster,
 
 - **Single HTML file** with React + ReactDOM + Babel-standalone loaded from CDN. No build step.
 - **JSX in `<script type="text/babel">`** — Babel transpiles in-browser at load.
-- **Supabase JS SDK** loaded from CDN; project ref: `oewaghxnwqzeneavontg`. Anon key is hardcoded (safe — RLS protects writes).
+- **Supabase JS SDK** loaded from CDN; project ref: `oewaghxnwqzeneavontg`. Anon key is hardcoded and public by design — there's no login, so RLS on the `team_data` table must allow the `anon` role to `select`/`update` directly (see the one-time SQL below).
 - **Persistence**:
-  - Currently `localStorage` only. The cloud-aware `load`/`save` layer is wired but `REQUIRE_AUTH = false` short-circuits hydration so writes don't reach Supabase.
-  - When `REQUIRE_AUTH = true`, magic-link login + `team_data` JSON-blob row in Supabase becomes the source of truth.
+  - `team_data` (single JSONB-blob row, id=1) in Supabase is the shared source of truth. The `load`/`save` layer hydrates from it unconditionally on mount (no auth gate) and every write mirrors to both `localStorage` (offline cache / fallback) and the cloud row.
+  - **No login.** Magic-link auth was removed. Instead, a shared passphrase (`EDIT_PASSPHRASE` near the top of `index.html`) gates a short list of actions that push shared changes: finalizing/unlocking a lineup, saving Roster Priority changes, generating a lineup, and restoring a backup file. See `EditGate` in `index.html`. It's a soft speed bump, not real security — the check is client-side JS, visible in page source.
+  - **One-time Supabase setup**: RLS must be opened to the anon role for `team_data`, and the row must exist:
+    ```sql
+    alter table public.team_data enable row level security;
+    drop policy if exists "team_data_anon_select" on public.team_data;
+    create policy "team_data_anon_select" on public.team_data for select to anon using (true);
+    drop policy if exists "team_data_anon_update" on public.team_data;
+    create policy "team_data_anon_update" on public.team_data for update to anon using (true) with check (true);
+    insert into public.team_data (id) values (1) on conflict (id) do nothing;
+    ```
+    Run once in the Supabase SQL editor. The old `allowed_emails` allowlist table is no longer used and can be dropped.
 
 ---
 
@@ -57,7 +67,7 @@ Single-file (`index.html`) React app for managing an 11U baseball team's roster,
    3. **Depth Chart**: 8 columns (no P, no BN). Players stacked vertically as tier-colored chips.
    4. **Positional Priority**: editable tier matrix (the original Roster table). Has a `?` button → modal with explanation.
 
-Header: **"Jacks 11U AA · 2026"** · ☾/☀ theme toggle · Live beta badge (when REQUIRE_AUTH=false) or email + Sign out (when authed).
+Header: **"Jacks 11U AA · 2026"** · ☾/☀ theme toggle · ⚙ settings (backup export/restore). No auth UI — anyone with the link sees the full app.
 
 ---
 
@@ -114,7 +124,7 @@ Single-row table. Columns are JSONB blobs: `roster`, `schedule`, `pitch_logs`, `
 | **Bench-score golf badges** | Lineup grid cells. Par = 2 sits. Eagle (0) = double-circle green; birdie (1) = single circle; par = blank; bogey (3) = single square orange; double bogey (4+) = double square red. Cell badge has count inside in the Player Summary table. |
 | **Validation panel** | Collapsed by default. Header doubles as the live ticker (severity chip + message + prev/next/dismiss/× controls) when there's an active warning. Refresh button always visible. |
 | **Undo / Redo / Reset** | Lineup Editor. History+future stacks; Reset reverts to the originally-generated grid. Resets on every fresh Generate. |
-| **Auth scaffolding** | Magic-link login screen, Supabase client wired, `team_data` row + `allowed_emails` allowlist + RLS schema applied. **Currently bypassed** via `REQUIRE_AUTH = false`. Toggle to true to re-enable cloud sync. |
+| **No-login shared editing** | Magic-link auth removed. Everyone hydrates from the shared Supabase `team_data` row on load (no auth gate). A shared passphrase (`EditGate`) + confirmation protects finalizing/unlocking a lineup, saving Roster Priority, generating a lineup, and restoring a backup — everything else is open. |
 | **Dark mode** | Full palette + `applyTheme(name)` mutates `C`, `chipStyle`, `thStyle`, `tdStyle`, `inputStyle`, `TIER_BG`, `TIER_COLORS` in place. Persisted to `dugout_theme`. ☾/☀ toggle in header. Includes the gameday HTML export. |
 | **Gameday HTML export** | Self-contained interactive download. Tap any two cells to swap, ✓ marks swapped, "Reset to plan" button. Now also has dark-mode toggle and per-inning hide ("tap inning header to hide") with a "Show all" pill. |
 | **Mobile pass** | `viewport-fit=cover`, `touch-action: manipulation`, `-webkit-tap-highlight-color: transparent`, `text-size-adjust: 100%`. 16px input font on phones to kill iOS zoom-on-focus. Tab labels shorten under 600px (CSS toggle). Pitching/Catching/Bench sections collapsed by default on mobile. Lineup Editor secondary action row stacks vertically on mobile. |
@@ -151,11 +161,7 @@ Single-row table. Columns are JSONB blobs: `roster`, `schedule`, `pitch_logs`, `
 
 ## TBDs / open work
 
-- **Auth**: `REQUIRE_AUTH = false`. Flip to `true` and **set up custom SMTP in Supabase** (Resend free tier or similar) before inviting other coaches — built-in email is rate-limited to 4/hour per project.
-- **Allowlist**: Currently only `peterson.ken12@gmail.com`. Add other coaches via:
-  ```sql
-  insert into public.allowed_emails (email) values ('coach@example.com');
-  ```
+- **Real per-coach auth**: intentionally not built. If it's wanted later, magic-link (or similar) would need to be re-added — the current `EditGate` passphrase is a shared soft gate, not identity-based.
 - **Import GC Data button**: placeholder modal. Needs a sample GameChanger CSV export to wire up the parser.
 - **Import Pitch Count button**: placeholder modal. Needs sample / format spec from the league's proprietary tool.
 - **`played` filter on Usage Report**: currently uses `lineup && date < today`. Could tighten to `played === true` if/when that flag is reliably set.
@@ -172,7 +178,8 @@ Single-row table. Columns are JSONB blobs: `roster`, `schedule`, `pitch_logs`, `
 | Bench tiers | `const BENCH_TIERS`, `BENCH_TIER_MAP` |
 | Default roster | `const DEFAULT_ROSTER` (line ~190) |
 | Lineup engine | `function generateLineup`, `function multiRunSolve`, `function validateLineup` |
-| Auth + cloud sync | `function App` top, `useEffect` blocks for `getSession()` and `onAuthStateChange` |
+| Edit passphrase gate | `EDIT_PASSPHRASE`, `function EditGate` |
+| Cloud hydration | `function App`, the `hydrateFromCloud().then(...)` `useEffect` |
 | `load`/`save` cloud-aware | Search `cloudCache`, `KEY_TO_COLUMN`, `pushToCloud` |
 | Schedule entry editor | `function ScheduleEditorModal`, `ScheduleTab.openAdd`/`openEdit`/`saveEditor`/`saveAndEdit` |
 | Pitch log modal | `function LogPitchesModal`, `App.handleSavePitchLog` |
@@ -217,7 +224,7 @@ The exported game-day file is a base64-encoded HTML in `const GAME_DAY_TEMPLATE_
 ## What worked particularly well
 
 - The single-file architecture — no build step, fast iteration loop, deploys via web UI.
-- localStorage as default with a clean cloud-sync path that can be flipped on by toggling `REQUIRE_AUTH`.
+- Supabase-backed shared state with localStorage as an offline mirror, no login required — the passphrase gate on a handful of actions is enough friction for a small trusted coaching group.
 - Module-level mutable design tokens (`C`) plus pre-built style objects that get rebuilt on theme change — kept the existing inline-style codebase working without a CSS overhaul.
 - Bench-score golf metaphor — the coaches who play golf instantly grok it.
 

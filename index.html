@@ -65,13 +65,14 @@ function useIsMobile(breakpoint = 768) {
 }
 
 // ══════════════════════════════════════════════════
-// AUTH GATE TOGGLE
-// Flip to true to re-enable the magic-link login screen and Supabase
-// cloud sync. While false, the app skips auth entirely and persists
-// to localStorage only — useful for fast iteration without burning
-// magic-link emails against the rate limit.
+// EDIT PASSPHRASE
+// No login. Anyone with the link can view everything. A handful of
+// specific actions (finalizing/unlocking a lineup, saving roster changes,
+// generating a lineup, bulk-importing a backup) prompt for this shared
+// passphrase plus a "this goes live for every coach" confirmation —
+// see the EditGate component. Nothing is remembered between prompts.
 // ══════════════════════════════════════════════════
-const REQUIRE_AUTH = false;
+const EDIT_PASSPHRASE = "jacksonthree";
 
 // ══════════════════════════════════════════════════
 // SUPABASE CLIENT
@@ -353,15 +354,11 @@ function save(k, v) {
 }
 
 // ══════════════════════════════════════════════════
-// TEAM DATA PUBLISH / SYNC
-// "Publish via the repo" mechanism — no auth, no backend. The head coach
-// exports a JSON snapshot of their localStorage, drops it into the repo
-// as `team-data.json`, and pushes. Other devices loading the site fetch
-// that file; if its `publishedAt` is newer than what the device has
-// locally, a banner offers to apply it (overwriting localStorage).
+// TEAM DATA BACKUP
+// Manual JSON export/import — a peace-of-mind snapshot tool, not the
+// primary sync path. Live sharing between coaches happens automatically
+// via the Supabase-backed load/save layer above.
 // ══════════════════════════════════════════════════
-const TEAM_DATA_URL = "./team-data.json";
-const PUBLISHED_AT_KEY = "dugout_publishedAt";
 const SYNC_KEYS = {
   roster:     "dugout_roster",
   schedule:   "dugout_schedule",
@@ -391,55 +388,6 @@ function downloadTeamData() {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
-  return data.publishedAt;
-}
-
-function applyTeamData(data) {
-  if (!data || typeof data !== "object") return false;
-  if (!Array.isArray(data.roster)) return false;
-  let touched = false;
-  for (const [short, lsKey] of Object.entries(SYNC_KEYS)) {
-    const v = data[short];
-    if (v == null) continue;
-    if (Array.isArray(v) || typeof v === "object") {
-      try { localStorage.setItem(lsKey, JSON.stringify(v)); touched = true; } catch {}
-    }
-  }
-  if (touched) {
-    const pa = typeof data.publishedAt === "number" ? data.publishedAt : Date.now();
-    try { localStorage.setItem(PUBLISHED_AT_KEY, String(pa)); } catch {}
-  }
-  return touched;
-}
-
-async function fetchTeamDataFromServer() {
-  try {
-    const res = await fetch(TEAM_DATA_URL, { cache: "no-store" });
-    if (!res.ok) return null;
-    const data = await res.json();
-    if (typeof data?.publishedAt !== "number") return null;
-    return data;
-  } catch { return null; }
-}
-
-function getLocalPublishedAt() {
-  try {
-    const v = localStorage.getItem(PUBLISHED_AT_KEY);
-    return v ? (parseInt(v, 10) || 0) : 0;
-  } catch { return 0; }
-}
-function setLocalPublishedAt(ts) {
-  try { localStorage.setItem(PUBLISHED_AT_KEY, String(ts)); } catch {}
-}
-
-function formatPublishedAt(ts) {
-  if (!ts) return "never";
-  try {
-    return new Date(ts).toLocaleString(undefined, {
-      month: "short", day: "numeric", year: "numeric",
-      hour: "numeric", minute: "2-digit",
-    });
-  } catch { return String(ts); }
 }
 
 // positionMap values may be bare tiers ("preferred") or tier-with-rank ("secondary:2").
@@ -2095,77 +2043,66 @@ function ShareLinkButton({ args, style }) {
 }
 
 // ══════════════════════════════════════════════════
-// LOGIN SCREEN
-// Magic-link auth: enter email → click link in inbox → signed in.
+// EDIT GATE
+// Shared two-step confirmation used by every action that pushes a change
+// other coaches will see: passphrase entry, then an explicit "this goes
+// live for everyone" confirmation. Each consumer owns its own open/close
+// state and passes in what happens on confirm — nothing here is global or
+// remembered between uses (see EDIT_PASSPHRASE above).
 // ══════════════════════════════════════════════════
-function LoginScreen() {
-  const [email, setEmail] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [sent, setSent] = useState(false);
-  const [error, setError] = useState("");
+function EditGate({ open, onClose, onConfirmed, actionLabel }) {
+  const [step, setStep] = useState("passphrase"); // "passphrase" | "confirm"
+  const [value, setValue] = useState("");
+  const [wrong, setWrong] = useState(false);
 
-  const handleSendLink = async () => {
-    const e = email.trim();
-    if (!e) return;
-    setLoading(true);
-    setError("");
-    const { error: err } = await supabase.auth.signInWithOtp({
-      email: e,
-      options: { emailRedirectTo: window.location.href },
-    });
-    setLoading(false);
-    if (err) setError(err.message);
-    else setSent(true);
+  useEffect(() => {
+    if (open) { setStep("passphrase"); setValue(""); setWrong(false); }
+  }, [open]);
+
+  if (!open) return null;
+
+  const submitPassphrase = () => {
+    if (value.trim().toLowerCase() === EDIT_PASSPHRASE.toLowerCase()) {
+      setStep("confirm");
+    } else {
+      setWrong(true);
+      setValue("");
+    }
   };
 
+  const btnStyle = { background: C.surface, border: `1px solid ${C.border}`, color: C.text, padding: "8px 16px", borderRadius: 6, fontFamily: FONT, fontSize: 13, fontWeight: 500, cursor: "pointer" };
+  const primaryBtn = { ...btnStyle, background: C.accent, borderColor: C.accent, color: "#fff", fontWeight: 600 };
+
   return (
-    <div style={{ background: C.bg, minHeight: "100vh", fontFamily: FONT, color: C.text, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
-      <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 32, maxWidth: 380, width: "100%", boxShadow: "0 1px 3px rgba(0,0,0,0.04)" }}>
-        <div style={{ marginBottom: 24, textAlign: "center" }}>
-          <div style={{ fontFamily: DISPLAY, fontSize: 28, fontWeight: 700, color: C.accent, marginBottom: 4 }}>Dugout</div>
-          <div style={{ fontSize: 12, color: C.textMuted, fontWeight: 500 }}>11U OBA</div>
-        </div>
-        {sent ? (
-          <div style={{ textAlign: "center" }}>
-            <div style={{ fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 8 }}>Check your email</div>
-            <div style={{ fontSize: 13, color: C.textMuted, lineHeight: 1.5 }}>
-              We sent a sign-in link to<br />
-              <strong style={{ color: C.text }}>{email}</strong>
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16, zIndex: 1000 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: C.surface, color: C.text, borderRadius: 8, padding: 24, maxWidth: 340, width: "100%", boxShadow: "0 8px 32px rgba(0,0,0,0.2)" }}>
+        {step === "passphrase" ? (
+          <React.Fragment>
+            <div style={{ fontFamily: DISPLAY, fontSize: 16, fontWeight: 700, marginBottom: 6 }}>Enter passphrase</div>
+            <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 14, lineHeight: 1.4 }}>{actionLabel} needs the shared coach passphrase.</div>
+            <input
+              type="password"
+              autoFocus
+              value={value}
+              onChange={e => { setValue(e.target.value); setWrong(false); }}
+              onKeyDown={e => { if (e.key === "Enter") submitPassphrase(); }}
+              placeholder="Passphrase"
+              style={{ width: "100%", padding: "8px 10px", borderRadius: 6, border: `1px solid ${wrong ? C.red : C.border}`, background: C.surfaceAlt, color: C.text, fontFamily: FONT, fontSize: 14, outline: "none", marginBottom: 6 }}
+            />
+            {wrong && <div style={{ fontSize: 12, color: C.redText, marginBottom: 8 }}>Incorrect passphrase — try again.</div>}
+            <div style={{ display: "flex", gap: 8, marginTop: 10, justifyContent: "flex-end" }}>
+              <button onClick={onClose} style={btnStyle}>Cancel</button>
+              <button onClick={submitPassphrase} style={primaryBtn}>Continue</button>
             </div>
-            <button onClick={() => { setSent(false); setEmail(""); }} style={{ marginTop: 20, fontSize: 12, color: C.textMuted, background: "transparent", border: "none", cursor: "pointer", textDecoration: "underline" }}>
-              Use a different email
-            </button>
-          </div>
+          </React.Fragment>
         ) : (
           <React.Fragment>
-            <label style={{ fontSize: 11, fontWeight: 600, color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.5, display: "block", marginBottom: 6 }}>Coach email</label>
-            <input
-              type="email"
-              value={email}
-              onChange={e => setEmail(e.target.value)}
-              placeholder="you@example.com"
-              autoFocus
-              onKeyDown={(e) => { if (e.key === "Enter" && email.trim()) handleSendLink(); }}
-              style={{ width: "100%", padding: "10px 12px", border: `1px solid ${C.border}`, borderRadius: 6, fontFamily: FONT, fontSize: 14, color: C.text, background: C.surfaceAlt, marginBottom: 12 }}
-            />
-            <button
-              onClick={handleSendLink}
-              disabled={loading || !email.trim()}
-              style={{
-                width: "100%", padding: "10px 16px", borderRadius: 6, fontFamily: FONT, fontSize: 14, fontWeight: 600,
-                background: (loading || !email.trim()) ? C.borderLight : C.accent,
-                color: (loading || !email.trim()) ? C.textMuted : "#fff",
-                border: `1px solid ${(loading || !email.trim()) ? C.border : C.accent}`,
-                cursor: (loading || !email.trim()) ? "not-allowed" : "pointer",
-              }}
-            >
-              {loading ? "Sending..." : "Send sign-in link"}
-            </button>
-            {error && (
-              <div style={{ marginTop: 12, fontSize: 12, color: C.redText, background: C.redLight, padding: "8px 10px", borderRadius: 4 }}>
-                {error}
-              </div>
-            )}
+            <div style={{ fontFamily: DISPLAY, fontSize: 16, fontWeight: 700, marginBottom: 6 }}>Are you sure?</div>
+            <div style={{ fontSize: 13, color: C.text, marginBottom: 16, lineHeight: 1.4 }}>This edit will be visible to all coaches.</div>
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+              <button onClick={onClose} style={btnStyle}>Cancel</button>
+              <button onClick={() => { onConfirmed(); onClose(); }} style={primaryBtn}>Confirm</button>
+            </div>
           </React.Fragment>
         )}
       </div>
@@ -2175,16 +2112,19 @@ function LoginScreen() {
 
 // ══════════════════════════════════════════════════
 // TEAM DATA MODAL
-// Settings sheet for exporting / importing / re-syncing the team-data.json
-// snapshot. Opened from the gear icon in the header.
+// Settings sheet for a manual backup snapshot. Live sharing between
+// coaches happens automatically via Supabase — this is just a peace-of-mind
+// export/restore tool, not the primary sync path. Opened from the gear
+// icon in the header. Import is gated by EditGate (owned by App) since it
+// overwrites shared data for every coach.
 // ══════════════════════════════════════════════════
-function TeamDataModal({ open, onClose, onExport, onImportFile, onSyncFromServer, localPublishedAt, serverPublishedAt }) {
+function TeamDataModal({ open, onClose, onExport, onPickImportFile }) {
   const fileInputRef = useRef(null);
   if (!open) return null;
 
   const onPickFile = (e) => {
     const f = e.target.files?.[0];
-    if (f) onImportFile(f);
+    if (f) onPickImportFile(f);
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
@@ -2198,41 +2138,21 @@ function TeamDataModal({ open, onClose, onExport, onImportFile, onSyncFromServer
     <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", display: "flex", alignItems: "flex-start", justifyContent: "center", padding: "30px 16px 20px", zIndex: 1000 }}>
       <div onClick={(e) => e.stopPropagation()} style={{ background: C.surface, color: C.text, borderRadius: 8, padding: 20, maxWidth: 560, width: "100%", maxHeight: "calc(100vh - 60px)", overflowY: "auto", boxShadow: "0 8px 32px rgba(0,0,0,0.2)" }}>
         <div style={{ display: "flex", alignItems: "center", marginBottom: 14 }}>
-          <span style={{ fontFamily: DISPLAY, fontSize: 18, fontWeight: 700, color: C.text }}>Team data</span>
+          <span style={{ fontFamily: DISPLAY, fontSize: 18, fontWeight: 700, color: C.text }}>Team data backup</span>
           <button onClick={onClose} title="Close" style={{ marginLeft: "auto", background: "transparent", border: "none", color: C.textMuted, cursor: "pointer", fontSize: 20, lineHeight: 1, padding: "4px 8px" }}>{"×"}</button>
-        </div>
-
-        <div style={{ fontSize: 12, color: C.textMuted, lineHeight: 1.6 }}>
-          <div>Last applied here: <strong style={{ color: C.text }}>{formatPublishedAt(localPublishedAt)}</strong></div>
-          <div>Latest on server: <strong style={{ color: C.text }}>{serverPublishedAt ? formatPublishedAt(serverPublishedAt) : "no team-data.json found"}</strong></div>
         </div>
 
         <div style={sectionStyle}>
           <div style={labelStyle}>Export</div>
-          <div style={descStyle}>Download a JSON snapshot of your current team data (roster, schedule, lineups, pitch logs, bench tiers).</div>
+          <div style={descStyle}>Download a JSON snapshot of the current team data (roster, schedule, lineups, pitch logs, bench tiers) as a manual backup.</div>
           <button onClick={onExport} style={primaryBtn}>Download team-data.json</button>
         </div>
 
         <div style={sectionStyle}>
-          <div style={labelStyle}>Import</div>
-          <div style={descStyle}>Replace your view with a JSON file (e.g. one a coach exported and sent you). Local edits will be overwritten.</div>
+          <div style={labelStyle}>Restore from backup</div>
+          <div style={descStyle}>Replace the shared team data with a backup JSON file. This overwrites what every coach sees — the passphrase gate applies.</div>
           <input ref={fileInputRef} type="file" accept="application/json,.json" onChange={onPickFile} style={{ display: "none" }} />
           <button onClick={() => fileInputRef.current?.click()} style={btnStyle}>{"Choose file…"}</button>
-        </div>
-
-        <div style={sectionStyle}>
-          <div style={labelStyle}>Sync from server</div>
-          <div style={descStyle}>Reload from the latest team-data.json deployed on this site. Use this if you skipped the banner earlier.</div>
-          <button onClick={onSyncFromServer} style={btnStyle}>Sync now</button>
-        </div>
-
-        <div style={{ ...sectionStyle, fontSize: 11, color: C.textMuted, lineHeight: 1.5 }}>
-          <div style={{ fontWeight: 600, color: C.textMuted, marginBottom: 4 }}>Publishing workflow</div>
-          <ol style={{ paddingLeft: 18, margin: 0 }}>
-            <li>Make changes here, then click <strong>Download team-data.json</strong>.</li>
-            <li>Upload that file to the GitHub repo (overwrite the existing team-data.json).</li>
-            <li>Push. Other devices loading the site see a banner offering to apply the new data.</li>
-          </ol>
         </div>
       </div>
     </div>
@@ -2260,67 +2180,18 @@ function App() {
     setTheme(next);
   };
 
-  // Auth session — null until the user signs in via magic link. While null,
-  // the app renders the LoginScreen instead of the main UI.
-  const [session, setSession] = useState(null);
-  const [authChecked, setAuthChecked] = useState(false);
-  // hydrated = true once we've fetched the team_data row. Main app waits on it.
+  // hydrated = true once we've fetched the shared team_data row. No login —
+  // everyone hydrates from the same cloud row on load; the main app waits
+  // on this instead of any auth check.
   const [hydrated, setHydrated] = useState(false);
   // True when this device's localStorage holds data the cloud doesn't have.
-  // Drives the import-to-cloud banner above the main content.
+  // Drives the import-to-cloud banner above the main content (first-time
+  // bootstrap from a device's existing local roster into the empty cloud row).
   const [showImportBanner, setShowImportBanner] = useState(false);
-
-  // Team data publish/sync. On mount we fetch ./team-data.json from the
-  // deployed origin; if its publishedAt is newer than what's stored locally,
-  // the banner offers to apply it (overwriting localStorage with the snapshot).
-  const [serverTeamData, setServerTeamData] = useState(null);
-  const [showServerBanner, setShowServerBanner] = useState(false);
   const [teamDataModalOpen, setTeamDataModalOpen] = useState(false);
-  // Local "last applied" timestamp, mirrored from localStorage. Stored as
-  // React state so the modal's displayed time updates after Export/Skip
-  // without needing a reload.
-  const [localPublishedAt, setLocalPublishedAtState] = useState(() => getLocalPublishedAt());
-  const stampLocalPublishedAt = (ts) => {
-    setLocalPublishedAt(ts);
-    setLocalPublishedAtState(ts);
-  };
-
-  useEffect(() => {
-    let cancelled = false;
-    fetchTeamDataFromServer().then(data => {
-      if (cancelled || !data) return;
-      setServerTeamData(data);
-      if (data.publishedAt > getLocalPublishedAt()) {
-        setShowServerBanner(true);
-      }
-    });
-    return () => { cancelled = true; };
-  }, []);
-
-  useEffect(() => {
-    if (!REQUIRE_AUTH) {
-      // Bypass: skip auth + cloud hydration; render the app immediately
-      // backed by localStorage only.
-      setAuthChecked(true);
-      setHydrated(true);
-      return;
-    }
-    supabase.auth.getSession().then(({ data }) => {
-      setSession(data.session);
-      setAuthChecked(true);
-    });
-    const { data: sub } = supabase.auth.onAuthStateChange((_evt, sess) => {
-      setSession(sess);
-      if (!sess) {
-        // Sign-out: drop hydration so next sign-in re-fetches.
-        setHydrated(false);
-        setShowImportBanner(false);
-        cloudReady = false;
-        for (const k of Object.keys(cloudCache)) delete cloudCache[k];
-      }
-    });
-    return () => sub?.subscription?.unsubscribe();
-  }, []);
+  // Pending Restore-from-backup file, gated by EditGate before it's applied.
+  const [pendingImport, setPendingImport] = useState(null);
+  const [importGateOpen, setImportGateOpen] = useState(false);
 
   const [roster, setRoster] = useState(() => {
     const storedVer = load("dugout_roster_version", 0);
@@ -2384,13 +2255,13 @@ function App() {
   }));
   useEffect(() => { save("dugout_gameMeta", gameMeta); }, [gameMeta]);
 
-  // Hydrate from Supabase once the user signs in. After the fetch completes,
-  // override React state with cloud values — but only when the cloud has
-  // real data. If cloud is empty (fresh project), leave the localStorage /
-  // DEFAULT_ROSTER initial state alone so the import banner can offer to
-  // push it up.
+  // Hydrate from Supabase on mount — no login, everyone reads the same
+  // shared row. After the fetch completes, override React state with cloud
+  // values — but only when the cloud has real data. If cloud is empty
+  // (fresh project), leave the localStorage / DEFAULT_ROSTER initial state
+  // alone so the import banner can offer to push it up.
   useEffect(() => {
-    if (!session || cloudReady) return;
+    if (cloudReady) return;
     hydrateFromCloud().then(() => {
       // If the cloud has *any* data, treat cloud as source of truth — sync
       // every field, even empties (so deletions made on other devices
@@ -2422,10 +2293,14 @@ function App() {
       }
       setHydrated(true);
     });
-  }, [session]);
+  }, []);
 
   // Push every cloud-mapped key from this device's localStorage up to the
   // team_data row. Used by the import banner.
+  // First-time bootstrap: push this device's existing localStorage data up
+  // to the (empty) shared cloud row. Gated — it's a bulk overwrite other
+  // coaches will immediately see.
+  const [importToCloudGateOpen, setImportToCloudGateOpen] = useState(false);
   const handleImportToCloud = () => {
     for (const k of Object.keys(KEY_TO_COLUMN)) {
       let v = null;
@@ -2435,30 +2310,13 @@ function App() {
     setShowImportBanner(false);
   };
 
-  // Apply the team-data.json that the server banner advertised: overwrite
-  // localStorage with the snapshot and reload so React re-reads everything
-  // from a clean slate. Reload is the simplest way to avoid having to
-  // mirror the snapshot into every useState above.
-  const applyServerTeamData = () => {
-    if (!serverTeamData) return;
-    if (applyTeamData(serverTeamData)) window.location.reload();
-    else alert("Couldn't apply server team data — it's missing a valid roster.");
-  };
-  // Suppress the banner for THIS published version. Bumps local publishedAt
-  // so we don't re-prompt on the next refresh until something newer ships.
-  // The user's local data is left untouched.
-  const skipServerTeamData = () => {
-    if (serverTeamData?.publishedAt) stampLocalPublishedAt(serverTeamData.publishedAt);
-    setShowServerBanner(false);
-  };
-  // Export: download a JSON snapshot, and stamp local publishedAt so the
-  // head coach's next page load doesn't see a banner pointing at their own
-  // export.
-  const handleExportTeamData = () => {
-    const ts = downloadTeamData();
-    stampLocalPublishedAt(ts);
-  };
-  const handleImportFile = (file) => {
+  // Export: download a JSON snapshot as a manual backup. Read-only, no gate needed.
+  const handleExportTeamData = () => { downloadTeamData(); };
+
+  // Restore-from-backup: parse + validate the picked file, then stage it
+  // behind EditGate (opened from the modal) since applying it overwrites
+  // shared data for every coach.
+  const handlePickImportFile = (file) => {
     const reader = new FileReader();
     reader.onload = (e) => {
       let data;
@@ -2468,17 +2326,18 @@ function App() {
         alert("This file doesn't look like a Dugout team-data export.");
         return;
       }
-      if (!confirm("Replace your current team data with this file? Local edits will be overwritten.")) return;
-      if (applyTeamData(data)) window.location.reload();
+      setPendingImport(data);
+      setImportGateOpen(true);
     };
     reader.readAsText(file);
   };
-  const handleSyncFromServer = async () => {
-    const data = await fetchTeamDataFromServer();
-    if (!data) { alert("No team-data.json found on the server."); return; }
-    if (!Array.isArray(data.roster)) { alert("Server team-data.json has no roster yet — nothing to apply."); return; }
-    if (!confirm(`Replace your current team data with the latest published version (${formatPublishedAt(data.publishedAt)})? Local edits will be overwritten.`)) return;
-    if (applyTeamData(data)) window.location.reload();
+  const applyPendingImport = () => {
+    if (!pendingImport) return;
+    setRoster(pendingImport.roster);
+    if (Array.isArray(pendingImport.schedule)) setSchedule(pendingImport.schedule);
+    if (Array.isArray(pendingImport.pitchLogs)) setPitchLogs(pendingImport.pitchLogs);
+    if (pendingImport.benchTiers && typeof pendingImport.benchTiers === "object") setBenchTiers(pendingImport.benchTiers);
+    setPendingImport(null);
   };
 
   // Transient: id of the schedule entry the user is currently editing. Set
@@ -2840,10 +2699,6 @@ function App() {
     { id:"roster",   label:"Team Reports",    shortLabel:"Reports" },
   ];
 
-  if (!authChecked) {
-    return <div style={{ background: C.bg, minHeight: "100vh" }} />;
-  }
-  if (REQUIRE_AUTH && !session) return <LoginScreen />;
   if (!hydrated) {
     return (
       <div style={{ background: C.bg, minHeight: "100vh", fontFamily: FONT, color: C.textMuted, display: "flex", alignItems: "center", justifyContent: "center" }}>
@@ -2863,25 +2718,11 @@ function App() {
             border: `1px solid ${C.border}`, cursor: "pointer",
             padding: "4px 8px", borderRadius: 4, lineHeight: 1, fontFamily: FONT,
           }}>{theme === "dark" ? "☀" : "☾"}</button>
-          <button onClick={() => setTeamDataModalOpen(true)} title="Team data (export, import, sync)" style={{
+          <button onClick={() => setTeamDataModalOpen(true)} title="Team data backup (export / restore)" style={{
             fontSize: 14, color: C.textMuted, background: "transparent",
             border: `1px solid ${C.border}`, cursor: "pointer",
             padding: "4px 8px", borderRadius: 4, lineHeight: 1, fontFamily: FONT,
           }}>{"⚙"}</button>
-          {session ? (
-            <React.Fragment>
-              <span style={{ fontSize: 11, color: C.textMuted, background: C.surfaceAlt, padding: "4px 8px", borderRadius: 4, border: `1px solid ${C.border}`, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                {session.user.email}
-              </span>
-              <button onClick={() => supabase.auth.signOut()} style={{ fontSize: 11, color: C.textMuted, background: "transparent", border: "none", cursor: "pointer", padding: "4px 6px" }}>
-                Sign out
-              </button>
-            </React.Fragment>
-          ) : (
-            <span title="Auth gate disabled in source — flip REQUIRE_AUTH back to true to require login" style={{ fontSize: 11, color: C.orange, background: C.orangeLight, padding: "4px 8px", borderRadius: 4, border: `1px solid ${C.orange}`, fontWeight: 600 }}>
-              Live beta
-            </span>
-          )}
         </div>
       </div>
       <div style={{ display: "flex", background: C.surface, borderBottom: `1px solid ${C.border}`, overflowX: "auto" }}>
@@ -2899,17 +2740,6 @@ function App() {
         ))}
       </div>
       <div style={{ maxWidth: 920, margin: "0 auto", padding: "20px 16px" }}>
-        {showServerBanner && serverTeamData && (
-          <div style={{ background: C.blueLight, border: `1px solid ${C.blue}`, borderRadius: 8, padding: "12px 16px", marginBottom: 16, display: "flex", alignItems: "center", gap: 12, fontSize: 13, color: C.text, flexWrap: "wrap" }}>
-            <div style={{ flex: "1 1 240px", lineHeight: 1.4 }}>
-              <strong>New team data published.</strong> Latest version is from {formatPublishedAt(serverTeamData.publishedAt)}. Apply it to load the team's current roster, schedule, and lineups. Local edits will be overwritten.
-            </div>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button onClick={skipServerTeamData} style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text, padding: "6px 12px", borderRadius: 6, fontFamily: FONT, fontSize: 12, fontWeight: 500, cursor: "pointer" }}>Skip</button>
-              <button onClick={applyServerTeamData} style={{ background: C.accent, border: `1px solid ${C.accent}`, color: "#fff", padding: "6px 12px", borderRadius: 6, fontFamily: FONT, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Apply</button>
-            </div>
-          </div>
-        )}
         {showImportBanner && (
           <div style={{ background: C.blueLight, border: `1px solid ${C.blue}`, borderRadius: 8, padding: "12px 16px", marginBottom: 16, display: "flex", alignItems: "center", gap: 12, fontSize: 13, color: C.text, flexWrap: "wrap" }}>
             <div style={{ flex: "1 1 240px", lineHeight: 1.4 }}>
@@ -2917,7 +2747,7 @@ function App() {
             </div>
             <div style={{ display: "flex", gap: 8 }}>
               <button onClick={() => setShowImportBanner(false)} style={{ background: C.surface, border: `1px solid ${C.border}`, color: C.text, padding: "6px 12px", borderRadius: 6, fontFamily: FONT, fontSize: 12, fontWeight: 500, cursor: "pointer" }}>Not now</button>
-              <button onClick={handleImportToCloud} style={{ background: C.accent, border: `1px solid ${C.accent}`, color: "#fff", padding: "6px 12px", borderRadius: 6, fontFamily: FONT, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Import to cloud</button>
+              <button onClick={() => setImportToCloudGateOpen(true)} style={{ background: C.accent, border: `1px solid ${C.accent}`, color: "#fff", padding: "6px 12px", borderRadius: 6, fontFamily: FONT, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>Import to cloud</button>
             </div>
           </div>
         )}
@@ -2970,10 +2800,19 @@ function App() {
         open={teamDataModalOpen}
         onClose={() => setTeamDataModalOpen(false)}
         onExport={handleExportTeamData}
-        onImportFile={handleImportFile}
-        onSyncFromServer={handleSyncFromServer}
-        localPublishedAt={localPublishedAt}
-        serverPublishedAt={serverTeamData?.publishedAt}
+        onPickImportFile={handlePickImportFile}
+      />
+      <EditGate
+        open={importGateOpen}
+        onClose={() => { setImportGateOpen(false); setPendingImport(null); }}
+        onConfirmed={applyPendingImport}
+        actionLabel="Restoring this backup"
+      />
+      <EditGate
+        open={importToCloudGateOpen}
+        onClose={() => setImportToCloudGateOpen(false)}
+        onConfirmed={handleImportToCloud}
+        actionLabel="Importing this device's data to the cloud"
       />
       {gameDayEntry && (
         <GameDayView
@@ -2991,8 +2830,12 @@ function App() {
 // ══════════════════════════════════════════════════
 // PRIORITY MATRIX
 // Combined positional + bench priority editor. Rendered in both RosterTab
-// (Team Reports) and SetupTab (Create a Lineup) so edits in one place sync
-// to the other — both read the same App-level state (roster + benchTiers).
+// (Team Reports) and SetupTab (Create a Lineup). Edits are staged in a
+// local draft — nothing reaches the shared roster/benchTiers until "Save
+// Changes" is clicked, which is gated by EditGate (passphrase + "visible
+// to all coaches" confirmation). This keeps position-tier cycling and
+// bench-chip taps fast and gate-free while still requiring the gate at
+// the one deliberate "commit" moment.
 // ══════════════════════════════════════════════════
 function PriorityMatrix({ roster, setRoster, benchTiers, setBenchTiers }) {
   const [showAdd, setShowAdd] = useState(false);
@@ -3006,6 +2849,17 @@ function PriorityMatrix({ roster, setRoster, benchTiers, setBenchTiers }) {
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [priorityHelpOpen, setPriorityHelpOpen] = useState(false);
 
+  // Draft copy of roster + benchTiers. Every interaction below mutates
+  // these, not the real props — re-synced whenever the committed data
+  // changes underneath us (e.g. right after our own save resolves).
+  const [draftRoster, setDraftRoster] = useState(roster);
+  const [draftBenchTiers, setDraftBenchTiers] = useState(benchTiers);
+  useEffect(() => { setDraftRoster(roster); setDraftBenchTiers(benchTiers); }, [roster, benchTiers]);
+  const isDirty = JSON.stringify(draftRoster) !== JSON.stringify(roster) || JSON.stringify(draftBenchTiers) !== JSON.stringify(benchTiers);
+  const [saveGateOpen, setSaveGateOpen] = useState(false);
+  const discardDraft = () => { setDraftRoster(roster); setDraftBenchTiers(benchTiers); };
+  const commitDraft = () => { setRoster(draftRoster); setBenchTiers(draftBenchTiers); };
+
   const cycleTier = (pos, map, setter) => {
     const cur = map[pos] || null;
     const idx = cur ? POS_TIERS.indexOf(cur) : -1;
@@ -3017,16 +2871,16 @@ function PriorityMatrix({ roster, setRoster, benchTiers, setBenchTiers }) {
   const addPlayer = () => {
     if (!name.trim()) return;
     const newId = Date.now().toString();
-    setRoster(prev => [...prev, { id: newId, name: name.trim(), number: number.trim(), positionMap: { ...newPosMap } }]);
+    setDraftRoster(prev => [...prev, { id: newId, name: name.trim(), number: number.trim(), positionMap: { ...newPosMap } }]);
     if (newBenchTier !== DEFAULT_BENCH_TIER) {
-      setBenchTiers(prev => ({ ...prev, [newId]: newBenchTier }));
+      setDraftBenchTiers(prev => ({ ...prev, [newId]: newBenchTier }));
     }
     setName(""); setNumber(""); setNewPosMap({}); setNewBenchTier(DEFAULT_BENCH_TIER); setShowAdd(false);
   };
   const startEdit = (p) => { setEditingId(p.id); setEditName(p.name); setEditNumber(p.number); };
-  const saveEdit = (id) => { setRoster(prev => prev.map(p => p.id === id ? { ...p, name: editName, number: editNumber } : p)); setEditingId(null); };
+  const saveEdit = (id) => { setDraftRoster(prev => prev.map(p => p.id === id ? { ...p, name: editName, number: editNumber } : p)); setEditingId(null); };
   const updatePlayerPos = (playerId, pos) => {
-    setRoster(prev => prev.map(p => {
+    setDraftRoster(prev => prev.map(p => {
       if (p.id !== playerId) return p;
       const map = { ...(p.positionMap || {}) };
       // Strip any :N rank before cycling — tier cycling resets rank to 1
@@ -3038,15 +2892,15 @@ function PriorityMatrix({ roster, setRoster, benchTiers, setBenchTiers }) {
     }));
   };
   const deletePlayer = (id) => {
-    setRoster(prev => prev.filter(p => p.id !== id));
+    setDraftRoster(prev => prev.filter(p => p.id !== id));
     // Clean up the matching bench-tier entry so we don't leak orphaned keys.
-    setBenchTiers(prev => { const next = { ...prev }; delete next[id]; return next; });
+    setDraftBenchTiers(prev => { const next = { ...prev }; delete next[id]; return next; });
     setConfirmDelete(null);
   };
   const resetRoster = () => {
-    if (!window.confirm("Reset roster to built-in defaults? This will overwrite any manual changes (including bench priorities).")) return;
-    setRoster(DEFAULT_ROSTER);
-    setBenchTiers(DEFAULT_BENCH_TIERS);
+    if (!window.confirm("Reset roster to built-in defaults? This will overwrite any manual changes (including bench priorities) once saved.")) return;
+    setDraftRoster(DEFAULT_ROSTER);
+    setDraftBenchTiers(DEFAULT_BENCH_TIERS);
   };
 
   return (
@@ -3097,8 +2951,22 @@ function PriorityMatrix({ roster, setRoster, benchTiers, setBenchTiers }) {
         </div>
       )}
 
+      {isDirty && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, background: C.orangeLight, border: `1px solid ${C.orange}`, borderRadius: 6, padding: "8px 12px", marginBottom: 10, fontSize: 12, color: C.text }}>
+          <span style={{ flex: 1 }}>Unsaved changes — not visible to other coaches yet.</span>
+          <button onClick={discardDraft} style={{ ...miniChipStyle }}>Discard</button>
+          <button onClick={() => setSaveGateOpen(true)} style={{ ...miniChipStyle, background: C.accent, color: "#fff", borderColor: C.accent, fontWeight: 700 }}>Save Changes</button>
+        </div>
+      )}
+      <EditGate
+        open={saveGateOpen}
+        onClose={() => setSaveGateOpen(false)}
+        onConfirmed={commitDraft}
+        actionLabel="Saving roster changes"
+      />
+
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-        <div style={{ fontSize: 12, color: C.textMuted, fontWeight: 500 }}>{roster.length} players</div>
+        <div style={{ fontSize: 12, color: C.textMuted, fontWeight: 500 }}>{draftRoster.length} players</div>
         <div style={{ display: "flex", gap: 8 }}>
           <button onClick={resetRoster} style={{
             display: "inline-flex", alignItems: "center", gap: 4,
@@ -3130,10 +2998,10 @@ function PriorityMatrix({ roster, setRoster, benchTiers, setBenchTiers }) {
             <th style={{ ...thStyle, width: 54 }} />
           </tr></thead>
           <tbody>
-            {roster.map((p, i) => {
+            {draftRoster.map((p, i) => {
               const bg = i % 2 === 0 ? C.surface : C.surfaceAlt;
               const isEd = editingId === p.id;
-              const currentBenchTier = benchTiers[p.id] || DEFAULT_BENCH_TIER;
+              const currentBenchTier = draftBenchTiers[p.id] || DEFAULT_BENCH_TIER;
               return (
                 <tr key={p.id}>
                   <td style={{ ...tdStyle, background: bg, textAlign: "center", color: C.accent, fontWeight: 600 }}>
@@ -3159,7 +3027,7 @@ function PriorityMatrix({ roster, setRoster, benchTiers, setBenchTiers }) {
                     <div style={{ display: "inline-flex", gap: 4 }}>
                       {BENCH_TIERS.map(bt => (
                         <button key={bt.id}
-                          onClick={() => setBenchTiers(prev => ({ ...prev, [p.id]: bt.id }))}
+                          onClick={() => setDraftBenchTiers(prev => ({ ...prev, [p.id]: bt.id }))}
                           title={`${bt.label} — ${bt.desc} (max ${bt.maxBench})`}
                           style={{ ...miniChipStyle,
                             background: currentBenchTier === bt.id ? bt.color : C.surface,
@@ -3210,7 +3078,7 @@ function PriorityMatrix({ roster, setRoster, benchTiers, setBenchTiers }) {
       {confirmDelete && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.3)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 999, backdropFilter: "blur(2px)" }} onClick={() => setConfirmDelete(null)}>
           <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 28, maxWidth: 320, boxShadow: "0 8px 30px rgba(0,0,0,0.12)" }} onClick={e => e.stopPropagation()}>
-            <div style={{ fontWeight: 600, marginBottom: 16, fontSize: 15 }}>Remove {roster.find(p => p.id === confirmDelete)?.name}?</div>
+            <div style={{ fontWeight: 600, marginBottom: 16, fontSize: 15 }}>Remove {draftRoster.find(p => p.id === confirmDelete)?.name}?</div>
             <div style={{ display: "flex", gap: 10 }}>
               <button onClick={() => deletePlayer(confirmDelete)} style={{ ...chipStyle, background: C.red, borderColor: C.red, color: "#fff", padding: "8px 20px" }}>Remove</button>
               <button onClick={() => setConfirmDelete(null)} style={{ ...chipStyle, padding: "8px 20px" }}>Cancel</button>
@@ -4222,6 +4090,9 @@ function SetupTab({ roster, setRoster, availablePlayers, absentIds, setAbsentIds
   const totalPitcherInnings = pitcherAssignments.reduce((s, p) => s + p.innings, 0);
   const totalCatcherInnings = catcherAssignments.reduce((s, c) => s + c.innings, 0);
   const canGenerate = pitcherAssignments.length > 0 && catcherAssignments.length > 0 && totalPitcherInnings >= gameInnings && totalCatcherInnings >= gameInnings && availablePlayers.length >= 9;
+  // Generating a lineup can auto-create a schedule entry and is what other
+  // coaches will see — gated the same way as the other "goes live" actions.
+  const [generateGateOpen, setGenerateGateOpen] = useState(false);
 
   return (
     <div>
@@ -4314,12 +4185,18 @@ function SetupTab({ roster, setRoster, availablePlayers, absentIds, setAbsentIds
       </div>
 
       <div style={{ marginTop: 28, textAlign: "center" }}>
-        <button onClick={onGenerate} disabled={!canGenerate} style={{
+        <button onClick={() => setGenerateGateOpen(true)} disabled={!canGenerate} style={{
           background: canGenerate ? C.accent : C.surfaceAlt, color: canGenerate ? "#fff" : C.textLight,
           border: canGenerate ? "none" : `1px solid ${C.border}`, padding: "14px 48px", borderRadius: 8,
           fontFamily: FONT, fontSize: 16, fontWeight: 600, cursor: canGenerate ? "pointer" : "not-allowed",
           boxShadow: canGenerate ? "0 4px 14px rgba(107,127,94,0.3)" : "none",
         }}>Generate Lineup</button>
+        <EditGate
+          open={generateGateOpen}
+          onClose={() => setGenerateGateOpen(false)}
+          onConfirmed={onGenerate}
+          actionLabel="Generating this lineup"
+        />
         {!canGenerate && (
           <div style={{ fontSize: 13, color: C.red, marginTop: 10 }}>
             {availablePlayers.length < 9 && "Need at least 9 available players. "}
@@ -4744,6 +4621,10 @@ function LineupTab({ grid, setGrid, posHistory, benchCount, roster, fullRoster, 
 
   const handleFinalize = () => { setIsFinalized(true); setSavedModalOpen(true); };
   const handleEdit = () => setIsFinalized(false);
+  // Finalize (lock) and Unlock & Edit are the two lineup actions gated by
+  // EditGate — everything else (swaps, pitch logs, deleting the lineup) is
+  // free while the lineup isn't finalized.
+  const [lockGateFor, setLockGateFor] = useState(null); // null | "finalize" | "unlock"
 
   // Wrappers around the module-level export helpers. The shared helpers
   // are also called directly from the Lineups list view so coaches can
@@ -5405,14 +5286,14 @@ function LineupTab({ grid, setGrid, posHistory, benchCount, roster, fullRoster, 
       {canEdit && (
         <div style={{ display: "flex", justifyContent: "center", marginTop: 14 }}>
           {!isFinalized ? (
-            <button onClick={handleFinalize} style={{
+            <button onClick={() => setLockGateFor("finalize")} style={{
               padding: "14px 56px", background: C.accent, color: "#fff", border: "none",
               borderRadius: 8, fontFamily: FONT, fontSize: 16, fontWeight: 700, cursor: "pointer",
               boxShadow: "0 4px 14px rgba(107,127,94,0.3)", letterSpacing: 0.3,
               minWidth: 280,
             }}>Finalize Lineup</button>
           ) : (
-            <button onClick={handleEdit} style={{
+            <button onClick={() => setLockGateFor("unlock")} style={{
               padding: "14px 56px", background: C.surface, color: C.orange,
               border: `1px solid ${C.orange}`, borderRadius: 8, fontFamily: FONT,
               fontSize: 15, fontWeight: 600, cursor: "pointer", minWidth: 280,
@@ -5420,6 +5301,12 @@ function LineupTab({ grid, setGrid, posHistory, benchCount, roster, fullRoster, 
           )}
         </div>
       )}
+      <EditGate
+        open={!!lockGateFor}
+        onClose={() => setLockGateFor(null)}
+        onConfirmed={() => { if (lockGateFor === "finalize") handleFinalize(); else if (lockGateFor === "unlock") handleEdit(); }}
+        actionLabel={lockGateFor === "unlock" ? "Unlocking this lineup to edit" : "Finalizing this lineup"}
+      />
 
       {pitchLogModalOpen && (
         <LogPitchesModal
