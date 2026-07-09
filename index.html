@@ -311,33 +311,53 @@ function notifyCloudError(context, message) {
 }
 
 async function hydrateFromCloud() {
-  const { data, error } = await supabase
-    .from("team_data")
-    .select("roster, schedule, pitch_logs, bench_tiers, game_meta")
-    .eq("id", 1)
-    .maybeSingle();
-  if (error) {
-    console.warn("Cloud hydrate failed:", error.message);
-    notifyCloudError("load", error.message);
-  } else if (data) {
-    for (const [key, column] of Object.entries(KEY_TO_COLUMN)) {
-      if (data[column] != null) cloudCache[key] = data[column];
+  // Wrapped in try/catch, not just checking the {error} result — a thrown
+  // exception (network drop, CORS, DNS) would otherwise skip the banner
+  // entirely and never set cloudReady, leaving the app hanging on
+  // "Loading team data…" forever.
+  try {
+    const { data, error } = await supabase
+      .from("team_data")
+      .select("roster, schedule, pitch_logs, bench_tiers, game_meta")
+      .eq("id", 1)
+      .maybeSingle();
+    if (error) {
+      console.warn("Cloud hydrate failed:", error.message);
+      notifyCloudError("load", error.message);
+    } else if (data) {
+      for (const [key, column] of Object.entries(KEY_TO_COLUMN)) {
+        if (data[column] != null) cloudCache[key] = data[column];
+      }
     }
+  } catch (err) {
+    console.warn("Cloud hydrate threw:", err.message || err);
+    notifyCloudError("load", err.message || String(err));
+  } finally {
+    cloudReady = true;
   }
-  cloudReady = true;
 }
 
 const writeQueue = {};
 async function pushToCloud(key, value) {
   const column = KEY_TO_COLUMN[key];
   if (!column) return;
-  const { error } = await supabase
-    .from("team_data")
-    .update({ [column]: value, updated_at: new Date().toISOString() })
-    .eq("id", 1);
-  if (error) {
-    console.warn("Cloud save failed for", key, error.message);
-    notifyCloudError("save", error.message);
+  // try/catch here is load-bearing, not defensive dressing: queueCloudWrite's
+  // loop below awaits this and only clears its "inFlight" flag afterward. An
+  // uncaught throw (network drop, CORS, DNS) would abort that loop mid-await,
+  // leaving inFlight stuck true forever — every future edit to this key would
+  // silently queue and never send again for the rest of the tab's session.
+  try {
+    const { error } = await supabase
+      .from("team_data")
+      .update({ [column]: value, updated_at: new Date().toISOString() })
+      .eq("id", 1);
+    if (error) {
+      console.warn("Cloud save failed for", key, error.message);
+      notifyCloudError("save", error.message);
+    }
+  } catch (err) {
+    console.warn("Cloud save threw for", key, err.message || err);
+    notifyCloudError("save", err.message || String(err));
   }
 }
 function queueCloudWrite(key, value) {
