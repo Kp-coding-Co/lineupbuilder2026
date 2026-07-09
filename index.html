@@ -298,14 +298,28 @@ const cloudCache = {};
 // race the hydrate fetch and overwrite the team's real data.
 let cloudReady = false;
 
+// Cloud errors happen inside plain async functions, outside React, so this
+// is a tiny pub-sub letting the App component surface them as a banner
+// instead of a console.warn nobody sees.
+let cloudErrorListeners = [];
+function onCloudError(fn) {
+  cloudErrorListeners.push(fn);
+  return () => { cloudErrorListeners = cloudErrorListeners.filter(f => f !== fn); };
+}
+function notifyCloudError(context, message) {
+  cloudErrorListeners.forEach(fn => fn({ context, message, at: Date.now() }));
+}
+
 async function hydrateFromCloud() {
   const { data, error } = await supabase
     .from("team_data")
     .select("roster, schedule, pitch_logs, bench_tiers, game_meta")
     .eq("id", 1)
     .maybeSingle();
-  if (error) console.warn("Cloud hydrate failed:", error.message);
-  else if (data) {
+  if (error) {
+    console.warn("Cloud hydrate failed:", error.message);
+    notifyCloudError("load", error.message);
+  } else if (data) {
     for (const [key, column] of Object.entries(KEY_TO_COLUMN)) {
       if (data[column] != null) cloudCache[key] = data[column];
     }
@@ -321,7 +335,10 @@ async function pushToCloud(key, value) {
     .from("team_data")
     .update({ [column]: value, updated_at: new Date().toISOString() })
     .eq("id", 1);
-  if (error) console.warn("Cloud save failed for", key, error.message);
+  if (error) {
+    console.warn("Cloud save failed for", key, error.message);
+    notifyCloudError("save", error.message);
+  }
 }
 function queueCloudWrite(key, value) {
   if (!KEY_TO_COLUMN[key] || !cloudReady) return;
@@ -2188,6 +2205,10 @@ function App() {
   // Drives the import-to-cloud banner above the main content (first-time
   // bootstrap from a device's existing local roster into the empty cloud row).
   const [showImportBanner, setShowImportBanner] = useState(false);
+  // Surfaces cloud load/save failures that would otherwise only show up as a
+  // console.warn. { context: "load"|"save", message, at } or null.
+  const [cloudError, setCloudError] = useState(null);
+  useEffect(() => onCloudError(err => setCloudError(err)), []);
   const [teamDataModalOpen, setTeamDataModalOpen] = useState(false);
   // Pending Restore-from-backup file, gated by EditGate before it's applied.
   const [pendingImport, setPendingImport] = useState(null);
@@ -2740,6 +2761,14 @@ function App() {
         ))}
       </div>
       <div style={{ maxWidth: 920, margin: "0 auto", padding: "20px 16px" }}>
+        {cloudError && (
+          <div style={{ background: C.redLight, border: `1px solid ${C.red}`, borderRadius: 8, padding: "12px 16px", marginBottom: 16, display: "flex", alignItems: "center", gap: 12, fontSize: 13, color: C.redText, flexWrap: "wrap" }}>
+            <div style={{ flex: "1 1 240px", lineHeight: 1.4 }}>
+              <strong>{cloudError.context === "load" ? "Couldn't load shared data" : "Couldn't save to shared data"}</strong> — changes here are only saved on this device until this is fixed. ({cloudError.message})
+            </div>
+            <button onClick={() => setCloudError(null)} style={{ background: "transparent", border: `1px solid ${C.red}`, color: C.redText, padding: "6px 12px", borderRadius: 6, fontFamily: FONT, fontSize: 12, fontWeight: 500, cursor: "pointer" }}>Dismiss</button>
+          </div>
+        )}
         {showImportBanner && (
           <div style={{ background: C.blueLight, border: `1px solid ${C.blue}`, borderRadius: 8, padding: "12px 16px", marginBottom: 16, display: "flex", alignItems: "center", gap: 12, fontSize: 13, color: C.text, flexWrap: "wrap" }}>
             <div style={{ flex: "1 1 240px", lineHeight: 1.4 }}>
