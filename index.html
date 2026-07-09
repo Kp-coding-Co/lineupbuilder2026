@@ -325,9 +325,15 @@ async function hydrateFromCloud() {
       console.warn("Cloud hydrate failed:", error.message);
       notifyCloudError("load", error.message);
     } else if (data) {
+      console.log("[cloud] hydrate response:", {
+        roster: data.roster?.length, schedule: data.schedule?.length,
+        pitch_logs: data.pitch_logs?.length, bench_tiers: data.bench_tiers && Object.keys(data.bench_tiers).length,
+      });
       for (const [key, column] of Object.entries(KEY_TO_COLUMN)) {
         if (data[column] != null) cloudCache[key] = data[column];
       }
+    } else {
+      console.warn("[cloud] hydrate returned no row for id=1");
     }
   } catch (err) {
     console.warn("Cloud hydrate threw:", err.message || err);
