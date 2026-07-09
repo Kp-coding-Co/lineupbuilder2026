@@ -310,6 +310,18 @@ function notifyCloudError(context, message) {
   cloudErrorListeners.forEach(fn => fn({ context, message, at: Date.now() }));
 }
 
+// Same idea but for successful load/save, so there's an always-visible,
+// no-DevTools-required way to see sync is actually happening — critical on
+// phones where nobody's got a console open.
+let cloudStatusListeners = [];
+function onCloudStatus(fn) {
+  cloudStatusListeners.push(fn);
+  return () => { cloudStatusListeners = cloudStatusListeners.filter(f => f !== fn); };
+}
+function notifyCloudStatus(context) {
+  cloudStatusListeners.forEach(fn => fn({ context, at: Date.now() }));
+}
+
 async function hydrateFromCloud() {
   // Wrapped in try/catch, not just checking the {error} result — a thrown
   // exception (network drop, CORS, DNS) would otherwise skip the banner
@@ -332,6 +344,7 @@ async function hydrateFromCloud() {
       for (const [key, column] of Object.entries(KEY_TO_COLUMN)) {
         if (data[column] != null) cloudCache[key] = data[column];
       }
+      notifyCloudStatus("load");
     } else {
       console.warn("[cloud] hydrate returned no row for id=1");
     }
@@ -360,6 +373,8 @@ async function pushToCloud(key, value) {
     if (error) {
       console.warn("Cloud save failed for", key, error.message);
       notifyCloudError("save", error.message);
+    } else {
+      notifyCloudStatus("save");
     }
   } catch (err) {
     console.warn("Cloud save threw for", key, err.message || err);
@@ -2235,6 +2250,10 @@ function App() {
   // console.warn. { context: "load"|"save", message, at } or null.
   const [cloudError, setCloudError] = useState(null);
   useEffect(() => onCloudError(err => setCloudError(err)), []);
+  // Last successful cloud load/save, so there's an always-on-screen signal
+  // that sync is actually working — no DevTools needed to check on a phone.
+  const [lastCloudOk, setLastCloudOk] = useState(null);
+  useEffect(() => onCloudStatus(s => { setLastCloudOk(s); setCloudError(null); }), []);
   const [teamDataModalOpen, setTeamDataModalOpen] = useState(false);
   // Pending Restore-from-backup file, gated by EditGate before it's applied.
   const [pendingImport, setPendingImport] = useState(null);
@@ -2760,6 +2779,11 @@ function App() {
         <span style={{ fontFamily: DISPLAY, fontSize: 22, fontWeight: 700, color: C.accent }}>Jacks 11U AA</span>
         <span style={{ fontSize: 12, color: C.textMuted, fontWeight: 500, marginLeft: 10 }}>2026</span>
         <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
+          <span title={cloudError ? cloudError.message : (lastCloudOk ? `Last synced ${new Date(lastCloudOk.at).toLocaleTimeString()}` : "Waiting for first sync")}
+                style={{ fontSize: 11, fontWeight: 600, color: cloudError ? C.redText : (lastCloudOk ? C.greenText : C.textMuted), display: "flex", alignItems: "center", gap: 4 }}>
+            <span style={{ width: 7, height: 7, borderRadius: "50%", display: "inline-block", background: cloudError ? C.red : (lastCloudOk ? C.green : C.border) }} />
+            <span>{cloudError ? "Sync error" : (lastCloudOk ? "Synced" : "Syncing…")}</span>
+          </span>
           <button onClick={toggleTheme} title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"} style={{
             fontSize: 14, color: C.textMuted, background: "transparent",
             border: `1px solid ${C.border}`, cursor: "pointer",
