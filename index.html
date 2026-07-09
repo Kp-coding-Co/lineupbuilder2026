@@ -346,7 +346,12 @@ async function hydrateFromCloud() {
       }
       notifyCloudStatus("load");
     } else {
+      // Postgrest's maybeSingle() returns {data: null, error: null} for a
+      // genuine zero-row match — not a JS-level error, so it would otherwise
+      // fall through both branches above and leave the badge stuck on
+      // "Syncing…" forever while the screen quietly shows stale local data.
       console.warn("[cloud] hydrate returned no row for id=1");
+      notifyCloudError("load", "No shared data row found (id=1) — the team_data table may be empty or misconfigured.");
     }
   } catch (err) {
     console.warn("Cloud hydrate threw:", err.message || err);
