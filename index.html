@@ -1979,12 +1979,18 @@ function downloadPNGForLineup({ grid, posHistory, roster, innings, gameMeta }) {
   link.click();
 }
 
+// Stable per-game key. The Gameday viewer uses it as its localStorage key, so
+// it has to come out identical every time a given game is exported or shared —
+// which is why the share link doesn't carry it and recomputes it on decode.
+function buildGameId(meta) {
+  const slug = (s) => (s || "").toString().trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  const datePart = (meta && meta.date) || new Date().toISOString().slice(0, 10);
+  return ["game", datePart, slug(meta && meta.opponent)].filter(Boolean).join("-");
+}
+
 function downloadGameDayHTMLForLineup({ grid, roster, innings, gameMeta }) {
   const meta = gameMeta || {};
-  const slug = (s) => (s || "").toString().trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
-  const datePart = meta.date || new Date().toISOString().slice(0, 10);
-  const oppSlug = slug(meta.opponent);
-  const gameId = ["game", datePart, oppSlug].filter(Boolean).join("-");
+  const gameId = buildGameId(meta);
 
   const playerMini = (p) => ({ id: p.id, name: p.name, number: p.number, positionMap: p.positionMap });
   const payload = {
@@ -2020,22 +2026,34 @@ function downloadGameDayHTMLForLineup({ grid, roster, innings, gameMeta }) {
 
 // ══════════════════════════════════════════════════
 // SHAREABLE LINK
-// Encodes the same payload the Gameday HTML export uses (roster mini-snapshot
-// + per-inning grid + meta + innings) into the URL fragment as base64url-
-// encoded JSON, so the recipient sees exactly what was finalized regardless
-// of whether the deployed team-data.json has caught up. At boot, if the
-// hash matches #share=..., we render the Gameday HTML viewer in place of
-// the app (see the share-boot block near the bottom of this file).
+// Carries the same payload the Gameday HTML export uses (roster mini-snapshot
+// + per-inning grid + meta + innings) in the URL fragment, so the recipient
+// sees exactly what was finalized regardless of whether the deployed
+// team-data.json has caught up. At boot, if the hash matches #s=... (or the
+// legacy #share=...), we render the Gameday HTML viewer in place of the app
+// (see the share-boot block near the bottom of this file).
+//
+// Base64ing that payload verbatim produced ~3,000-character links — too long
+// to paste into a text message without it wrapping into a mess. So the payload
+// is squeezed first (compactSharePayload) down to ~400 characters:
+//   • only players the grid actually references ride along (absentees dropped)
+//   • the fields the viewer never reads (number, positionMap) are dropped
+//   • each inning becomes one string of base36 roster indices in SHARE_SLOTS
+//     order, bench ids appended, "-" for an empty slot
+//   • gameId is recomputed on decode instead of being carried
 // ══════════════════════════════════════════════════
+
+// Slot order for the compact grid encoding. Baked into every link that's
+// already out there — bump SHARE_VERSION if this order ever has to change.
+const SHARE_SLOTS = ["P", ...FIELD_POS];
+const SHARE_VERSION = 2;
+
 function buildSharePayload({ grid, roster, innings, gameMeta }) {
   const meta = gameMeta || {};
-  const slug = (s) => (s || "").toString().trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
-  const datePart = meta.date || new Date().toISOString().slice(0, 10);
-  const oppSlug = slug(meta.opponent);
-  const gameId = ["game", datePart, oppSlug].filter(Boolean).join("-");
-  const playerMini = (p) => ({ id: p.id, name: p.name, number: p.number, positionMap: p.positionMap });
+  // The viewer only ever resolves ids to names, so that's all a player needs.
+  const playerMini = (p) => ({ id: p.id, name: p.name });
   return {
-    gameId,
+    gameId: buildGameId(meta),
     meta: {
       date: meta.date || null,
       opponent: meta.opponent || null,
@@ -2047,8 +2065,85 @@ function buildSharePayload({ grid, roster, innings, gameMeta }) {
   };
 }
 
+// Squeeze a viewer payload into the wire form described above. Players are
+// listed as "id:name" so the ids survive the round trip — the viewer keys its
+// saved in-game edits by player id, and re-sharing a game must not renumber
+// anyone. An id the grid references but the roster no longer has (a player cut
+// after the lineup was saved) is listed as "id:" with no name: it keeps its
+// slot in the grid, and the viewer renders it as "?" just as it did before.
+function compactSharePayload(payload) {
+  const nameById = new Map((payload.roster || []).map(p => [p.id, p.name || ""]));
+  const order = [];
+  const seen = new Set();
+  const note = (id) => {
+    if (!id || seen.has(id)) return;
+    seen.add(id);
+    order.push(id);
+  };
+  const rows = payload.grid || [];
+  for (const inn of rows) {
+    for (const slot of SHARE_SLOTS) note(inn && inn[slot]);
+    for (const id of ((inn && inn.BN) || [])) note(id);
+  }
+
+  const idx = new Map(order.map((id, i) => [id, i]));
+  const width = shareIndexWidth(order.length);
+  const tok = (id) => (idx.has(id) ? idx.get(id).toString(36).padStart(width, "0") : "-".repeat(width));
+  const g = rows.map(inn => (
+    SHARE_SLOTS.map(slot => tok(inn && inn[slot])).join("") +
+    ((inn && inn.BN) || []).filter(id => idx.has(id)).map(tok).join("")
+  ));
+
+  const meta = payload.meta || {};
+  const out = { v: SHARE_VERSION, n: payload.innings, p: order.map(id => id + ":" + (nameById.get(id) || "")), g };
+  if (meta.date) out.d = meta.date;
+  if (meta.opponent) out.o = meta.opponent;
+  if (meta.gameType) out.t = meta.gameType;
+  return out;
+}
+
+// One base36 char per roster index covers 36 players; anything bigger widens
+// to two (1,296). Derived from the roster length on both ends, so it never
+// has to be stored in the link.
+function shareIndexWidth(rosterSize) {
+  return rosterSize > 36 ? 2 : 1;
+}
+
+function expandSharePayload(c) {
+  if (!c || !Array.isArray(c.p) || !Array.isArray(c.g)) return null;
+  const ids = [];
+  const roster = [];
+  for (const entry of c.p) {
+    const s = String(entry);
+    const i = s.indexOf(":");
+    const id = i < 0 ? s : s.slice(0, i);
+    const name = i < 0 ? s : s.slice(i + 1);
+    ids.push(id);
+    if (name) roster.push({ id, name });
+  }
+  const width = shareIndexWidth(ids.length);
+  const idAt = (token) => {
+    const n = parseInt(token, 36);
+    return Number.isNaN(n) || ids[n] === undefined ? null : ids[n];
+  };
+  const grid = c.g.map((row) => {
+    const src = String(row);
+    const inn = {};
+    SHARE_SLOTS.forEach((slot, i) => { inn[slot] = idAt(src.slice(i * width, i * width + width)); });
+    const bench = [];
+    for (let i = SHARE_SLOTS.length * width; i < src.length; i += width) {
+      const id = idAt(src.slice(i, i + width));
+      if (id) bench.push(id);
+    }
+    inn.BN = bench;
+    return inn;
+  });
+  const meta = { date: c.d || null, opponent: c.o || null, gameType: c.t || null };
+  return { gameId: buildGameId(meta), meta, innings: c.n, roster, grid };
+}
+
 function encodeSharePayload(payload) {
-  const json = JSON.stringify(payload);
+  const json = JSON.stringify(compactSharePayload(payload));
   // utf-8 safe btoa
   const b64 = btoa(unescape(encodeURIComponent(json)));
   // base64url
@@ -2062,7 +2157,11 @@ function decodeSharePayload(encoded) {
     const pad = b64.length % 4;
     if (pad) b64 += "=".repeat(4 - pad);
     const json = decodeURIComponent(escape(atob(b64)));
-    return JSON.parse(json);
+    const data = JSON.parse(json);
+    // Links minted before the compact format carried the viewer payload
+    // verbatim and have no version marker — those still open as-is.
+    if (data && data.v) return data.v === SHARE_VERSION ? expandSharePayload(data) : null;
+    return data;
   } catch { return null; }
 }
 
@@ -2070,7 +2169,7 @@ function buildShareUrl(args) {
   const payload = buildSharePayload(args);
   const encoded = encodeSharePayload(payload);
   const base = window.location.origin + window.location.pathname + window.location.search;
-  return base + "#share=" + encoded;
+  return base + "#s=" + encoded;
 }
 
 async function copyShareLinkForLineup(args) {
@@ -4718,7 +4817,7 @@ function LineupTab({ grid, setGrid, posHistory, benchCount, roster, fullRoster, 
   };
 
   // Copy a self-contained share link to the clipboard. The link carries
-  // the lineup payload in its #share=... fragment, so the recipient sees
+  // the lineup payload in its #s=... fragment, so the recipient sees
   // the finalized lineup even if team-data.json on the server is stale.
   const [shareCopyState, setShareCopyState] = useState("idle"); // idle | ok | err
   const handleCopyShareLink = async () => {
@@ -6534,7 +6633,7 @@ function ScheduleEditorModal({ mode, kind, date, opponent, setOpponent, homeAway
   );
 }
 
-// If the URL carries a #share=... fragment, treat this page load as a
+// If the URL carries a #s=... fragment (or the legacy #share=...), treat this page load as a
 // read-only viewer: decode the payload and host the Gameday HTML template
 // inside a fullscreen iframe so its inline scripts run in their own
 // document. The viewer is self-contained — it never touches localStorage
@@ -6542,7 +6641,7 @@ function ScheduleEditorModal({ mode, kind, date, opponent, setOpponent, homeAway
 // shared lineup. The original hash URL stays intact, so the link is
 // bookmarkable and re-shareable.
 (function bootShareViewerIfNeeded() {
-  const m = /(?:^|[#&])share=([^&]+)/.exec(window.location.hash || "");
+  const m = /(?:^|[#&])(?:s|share)=([^&]+)/.exec(window.location.hash || "");
   if (!m) return false;
   const payload = decodeSharePayload(m[1]);
   if (!payload || !Array.isArray(payload.grid) || !Array.isArray(payload.roster)) return false;
