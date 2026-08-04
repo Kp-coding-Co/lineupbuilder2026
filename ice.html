@@ -1,0 +1,3010 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <title>Ice Scheduler 2026-27</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html { -webkit-text-size-adjust: 100%; }
+    body {
+      background: #f5f3ef;
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
+    }
+    button { user-select: none; -webkit-user-select: none; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-thumb { background: #d4cfc7; border-radius: 3px; }
+    @keyframes pulse-border { 0%,100%{ box-shadow: 0 0 0 2px rgba(59,130,246,0.4); } 50%{ box-shadow: 0 0 0 4px rgba(59,130,246,0.2); } }
+    .swap-selected { animation: pulse-border 1.2s infinite; border-radius: 6px; }
+
+    /* iOS Safari auto-zooms any focused control under 16px. */
+    @media (max-width: 768px) {
+      input, select, textarea { font-size: 16px !important; }
+    }
+
+    /* Tab labels: full label on desktop, shorter form on phones. */
+    .tab-mobile { display: none; }
+    @media (max-width: 600px) {
+      .tab-desktop { display: none; }
+      .tab-mobile { display: inline; }
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel">
+const { useState, useEffect, useMemo, useCallback, useRef } = React;
+
+// Live "is this a phone-sized viewport" flag, used to set sensible defaults
+// (collapsed sections, vertical action stacks). Updates on resize/rotate.
+function useIsMobile(breakpoint = 768) {
+  const [isMobile, setIsMobile] = useState(() =>
+    typeof window !== "undefined" && window.innerWidth <= breakpoint
+  );
+  useEffect(() => {
+    const onResize = () => setIsMobile(window.innerWidth <= breakpoint);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, [breakpoint]);
+  return isMobile;
+}
+
+// ══════════════════════════════════════════════════
+// EDIT PASSPHRASE
+// Same soft gate as the lineup app: no login, everything is viewable, but
+// the two actions that stomp on everyone else's copy of the schedule
+// (publishing/unpublishing a week, restoring a backup file) ask for this
+// shared passphrase plus an explicit confirmation. Client-side only — it's
+// a speed bump against accidents, not security.
+// ══════════════════════════════════════════════════
+const EDIT_PASSPHRASE = "coldsteel";
+
+// ══════════════════════════════════════════════════
+// SUPABASE CLIENT (optional)
+// Reuses the lineup app's project. If the `ice_data` table doesn't exist
+// yet the app quietly falls back to local-only storage — see hydrate().
+// The SQL to enable sharing is in ICE_HANDOFF.md.
+// ══════════════════════════════════════════════════
+const SUPABASE_URL = "https://oewaghxnwqzeneavontg.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9ld2FnaHhud3F6ZW5lYXZvbnRnIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzcxNDAxNzcsImV4cCI6MjA5MjcxNjE3N30.Y1aEbQkl2YSU964905nYKO9J9AnomaZMnvpG_Ika9kk";
+// If the SDK didn't load (offline, blocked CDN, opened from a USB stick at
+// the rink) the app still runs — it just stays local-only.
+const supabase = (() => {
+  try { return window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY); }
+  catch { return null; }
+})();
+
+// ══════════════════════════════════════════════════
+// DESIGN TOKENS
+// `C` is a mutable object — `applyTheme` overwrites its contents in place
+// when the user toggles dark mode. Components reference `C.x` inline in
+// their styles, which evaluate at render time, so a re-render after a
+// theme swap picks up the new values automatically.
+// ══════════════════════════════════════════════════
+const C_LIGHT = {
+  bg: "#f5f3ef", surface: "#ffffff", surfaceAlt: "#f9f7f4",
+  border: "#e2ddd5", borderLight: "#ece8e1",
+  text: "#3d3832", textMuted: "#8c8478", textLight: "#b0a89d",
+  accent: "#3d6f8e", accentDark: "#2f5871", accentLight: "#e6eef3",
+  green: "#6b8f5e", greenLight: "#eaf2e6", greenText: "#4a6e3f",
+  red: "#c07060", redLight: "#f8eeeb", redText: "#9e4f3f",
+  orange: "#c09050", orangeLight: "#f8f2e8", orangeText: "#8a6224",
+  blue: "#6088a0", blueLight: "#e8f0f4", blueText: "#355063",
+  ice: "#dceaf2", iceLine: "#b9d3e2",
+  onAccent: "#ffffff",
+};
+const C_DARK = {
+  bg: "#16191c", surface: "#20252a", surfaceAlt: "#262c32",
+  border: "#343c44", borderLight: "#2d343a",
+  text: "#e4e8ec", textMuted: "#9aa4ae", textLight: "#646e78",
+  accent: "#7fb0cd", accentDark: "#5f92b0", accentLight: "#25333d",
+  green: "#8fb37e", greenLight: "#2d3a26", greenText: "#a8c898",
+  red: "#d08d7d", redLight: "#3a2825", redText: "#e0a89a",
+  orange: "#d4a872", orangeLight: "#3a2f22", orangeText: "#e0bd8c",
+  blue: "#88a5b8", blueLight: "#2a323a", blueText: "#b6cbd8",
+  ice: "#243440", iceLine: "#34505f",
+  onAccent: "#16191c",
+};
+const C = { ...C_LIGHT };
+
+// Age-band tints, swapped wholesale in dark mode so the pastel fills don't
+// glow against a dark surface.
+const BAND_BG_LIGHT = { u7:"#eaf2e6", u9:"#e8f0f4", u11:"#faf0cc", u13:"#f4e8f2", u15:"#fbe0d0", u18:"#e6e2f2" };
+const BAND_BG_DARK  = { u7:"#2d3a26", u9:"#25333d", u11:"#3d3520", u13:"#33283a", u15:"#3a2825", u18:"#2a2839" };
+const BAND_BG = { ...BAND_BG_LIGHT };
+
+function applyTheme(name) {
+  const src = name === "dark" ? C_DARK : C_LIGHT;
+  for (const k of Object.keys(src)) C[k] = src[k];
+  // Shared style objects are captured by reference all over the app, so
+  // mutate them in place rather than rebinding.
+  if (typeof chipStyle !== "undefined") {
+    Object.assign(chipStyle,     { borderColor: C.border, background: C.surface, color: C.text });
+    Object.assign(miniChipStyle, { borderColor: C.border, background: C.surface, color: C.text });
+    Object.assign(thStyle,       { color: C.textMuted, borderBottom: `2px solid ${C.border}`, background: C.surfaceAlt });
+    Object.assign(tdStyle,       { borderBottom: `1px solid ${C.borderLight}` });
+    Object.assign(inputStyle,    { background: C.surfaceAlt, border: `1px solid ${C.border}`, color: C.text });
+  }
+  const bands = name === "dark" ? BAND_BG_DARK : BAND_BG_LIGHT;
+  for (const k of Object.keys(bands)) BAND_BG[k] = bands[k];
+}
+const FONT = "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+const DISPLAY = "'Georgia', 'Times New Roman', serif";
+
+// ══════════════════════════════════════════════════
+// TIME HELPERS
+// Everything internal is "minutes since midnight" (an integer). Strings are
+// only for storage ("HH:MM", 24h) and display ("5:30p").
+// ══════════════════════════════════════════════════
+const STEP = 15;              // scheduling granularity, in minutes
+const MIN_USEFUL_BLOCK = 50;  // a free gap shorter than this is wasted ice
+
+function toMin(hhmm) {
+  if (typeof hhmm === "number") return hhmm;
+  if (!hhmm) return 0;
+  const [h, m] = String(hhmm).split(":").map(Number);
+  return (h || 0) * 60 + (m || 0);
+}
+function toHHMM(min) {
+  const m = Math.max(0, Math.round(min));
+  return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+}
+function fmtTime(min) {
+  const m = toMin(min);
+  let h = Math.floor(m / 60), mm = m % 60;
+  const suffix = h >= 12 ? "p" : "a";
+  h = h % 12 === 0 ? 12 : h % 12;
+  return mm === 0 ? `${h}${suffix}` : `${h}:${String(mm).padStart(2, "0")}${suffix}`;
+}
+function fmtRange(startMin, endMin) {
+  return `${fmtTime(startMin)}–${fmtTime(endMin)}`;
+}
+function fmtDur(min) {
+  const h = Math.floor(min / 60), m = min % 60;
+  if (h && m) return `${h}h ${m}m`;
+  if (h) return `${h}h`;
+  return `${m}m`;
+}
+// Date strings are "YYYY-MM-DD" and always parsed as local noon so DST and
+// timezone offsets can never shift the calendar day.
+function parseDate(ds) {
+  const [y, m, d] = ds.split("-").map(Number);
+  return new Date(y, m - 1, d, 12, 0, 0, 0);
+}
+function dateStr(dt) {
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
+}
+function addDays(ds, n) {
+  const dt = parseDate(ds);
+  dt.setDate(dt.getDate() + n);
+  return dateStr(dt);
+}
+function dowOf(ds) { return parseDate(ds).getDay(); }        // 0 = Sunday
+function isWeekend(ds) { const d = dowOf(ds); return d === 0 || d === 6; }
+function dayTypeOf(ds) { return isWeekend(ds) ? "weekend" : "weekday"; }
+const DOW_SHORT = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+const DOW_LONG  = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+const MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+function fmtDate(ds) {
+  const dt = parseDate(ds);
+  return `${DOW_SHORT[dt.getDay()]} ${MONTHS[dt.getMonth()].slice(0, 3)} ${dt.getDate()}`;
+}
+function fmtDateLong(ds) {
+  const dt = parseDate(ds);
+  return `${DOW_LONG[dt.getDay()]}, ${MONTHS[dt.getMonth()]} ${dt.getDate()}`;
+}
+// Monday-anchored week start — associations plan ice Mon-to-Sun.
+function weekStartOf(ds) {
+  const d = dowOf(ds);
+  return addDays(ds, d === 0 ? -6 : 1 - d);
+}
+function weekLabel(ws) {
+  return `${fmtDate(ws).replace(/^\w+ /, "")} – ${fmtDate(addDays(ws, 6)).replace(/^\w+ /, "")}`;
+}
+function uid(prefix) {
+  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 7)}`;
+}
+function overlaps(aStart, aEnd, bStart, bEnd) {
+  return aStart < bEnd && bStart < aEnd;
+}
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+function mean(arr) { return arr.length ? arr.reduce((a, b) => a + b, 0) / arr.length : 0; }
+
+// ══════════════════════════════════════════════════
+// DOMAIN CONSTANTS
+// ══════════════════════════════════════════════════
+
+// Age bands, youngest first. Order matters: the solver places the most
+// tightly-constrained (youngest) teams first, and several reports render in
+// this order.
+const AGE_GROUPS = [
+  { id: "u7",  label: "U7",  full: "U7 (Timbits)" },
+  { id: "u9",  label: "U9",  full: "U9 (Novice)" },
+  { id: "u11", label: "U11", full: "U11 (Atom)" },
+  { id: "u13", label: "U13", full: "U13 (PeeWee)" },
+  { id: "u15", label: "U15", full: "U15 (Bantam)" },
+  { id: "u18", label: "U18", full: "U18 (Midget)" },
+];
+const AGE_MAP = Object.fromEntries(AGE_GROUPS.map(a => [a.id, a]));
+
+const SESSION_KINDS = [
+  { id: "practice", label: "Practice", color: () => C.blue },
+  { id: "game",     label: "Game",     color: () => C.accent },
+  { id: "skills",   label: "Skills",   color: () => C.green },
+];
+const SESSION_KIND_MAP = Object.fromEntries(SESSION_KINDS.map(k => [k.id, k]));
+
+// Per-age-band scheduling rules. `durationMin` is the length of one ice
+// time. `earliest`/`latest` are the earliest and latest *start* times
+// allowed — a U9 team with latest 18:00 may start at 18:00 and skate until
+// 18:50, but may not start at 18:15. Weekday and weekend windows are
+// separate because Saturday mornings are the whole point of minor hockey.
+const DEFAULT_RULES = {
+  u7:  { durationMin: 50, weekday: { earliest: "16:30", latest: "17:45" }, weekend: { earliest: "07:00", latest: "16:00" }, allowShared: true,  maxPerDay: 1, maxPerWeek: 3 },
+  u9:  { durationMin: 50, weekday: { earliest: "16:30", latest: "18:15" }, weekend: { earliest: "07:00", latest: "17:00" }, allowShared: true,  maxPerDay: 1, maxPerWeek: 3 },
+  u11: { durationMin: 60, weekday: { earliest: "17:00", latest: "19:15" }, weekend: { earliest: "07:00", latest: "19:00" }, allowShared: false, maxPerDay: 1, maxPerWeek: 4 },
+  u13: { durationMin: 60, weekday: { earliest: "17:00", latest: "20:15" }, weekend: { earliest: "07:00", latest: "20:00" }, allowShared: false, maxPerDay: 1, maxPerWeek: 4 },
+  u15: { durationMin: 75, weekday: { earliest: "17:30", latest: "20:45" }, weekend: { earliest: "07:00", latest: "20:30" }, allowShared: false, maxPerDay: 1, maxPerWeek: 4 },
+  u18: { durationMin: 75, weekday: { earliest: "18:00", latest: "21:15" }, weekend: { earliest: "07:00", latest: "21:00" }, allowShared: false, maxPerDay: 1, maxPerWeek: 4 },
+};
+
+// "Prime" ice is what everyone fights over; "rough" ice is what nobody
+// wants. Both are tracked per team so the solver can spread the pain.
+const PRIME_WEEKDAY = { start: toMin("17:30"), end: toMin("20:00") };
+const PRIME_WEEKEND = { start: toMin("09:00"), end: toMin("15:00") };
+const ROUGH_WEEKEND_BEFORE = toMin("08:00");
+const ROUGH_WEEKDAY_AFTER  = toMin("20:30");
+
+function slotQuality(ds, startMin) {
+  const weekend = isWeekend(ds);
+  const prime = weekend ? PRIME_WEEKEND : PRIME_WEEKDAY;
+  if (weekend && startMin < ROUGH_WEEKEND_BEFORE) return "rough";
+  if (!weekend && startMin >= ROUGH_WEEKDAY_AFTER) return "rough";
+  if (startMin >= prime.start && startMin < prime.end) return "prime";
+  return "standard";
+}
+const QUALITY_LABEL = { prime: "Prime", standard: "Standard", rough: "Off-peak" };
+
+// ══════════════════════════════════════════════════
+// DEFAULT DATA
+// Bumping DATA_VERSION re-seeds a device that's still on an older shape.
+// ══════════════════════════════════════════════════
+const DATA_VERSION = 1;
+
+const DEFAULT_RINKS = [
+  { id: "rink_civic1",  name: "Civic Arena — Rink 1", short: "Civic 1" },
+  { id: "rink_civic2",  name: "Civic Arena — Rink 2", short: "Civic 2" },
+  { id: "rink_north",   name: "Northside Community",  short: "North" },
+  { id: "rink_memorial",name: "Memorial Arena",       short: "Memorial" },
+];
+
+const DEFAULT_TEAMS = [
+  { id: "t_u7blue",  name: "U7 Blue",    ageGroup: "u7",  level: "House",  sessionsPerWeek: 2, homeRinkId: "rink_north",    blackoutDows: [], notes: "" },
+  { id: "t_u7white", name: "U7 White",   ageGroup: "u7",  level: "House",  sessionsPerWeek: 2, homeRinkId: "rink_north",    blackoutDows: [], notes: "" },
+  { id: "t_u9blue",  name: "U9 Blue",    ageGroup: "u9",  level: "House",  sessionsPerWeek: 2, homeRinkId: "rink_north",    blackoutDows: [], notes: "" },
+  { id: "t_u9white", name: "U9 White",   ageGroup: "u9",  level: "House",  sessionsPerWeek: 2, homeRinkId: "rink_civic2",   blackoutDows: [], notes: "" },
+  { id: "t_u11a",    name: "U11 A",      ageGroup: "u11", level: "A",      sessionsPerWeek: 3, homeRinkId: "rink_civic1",   blackoutDows: [], notes: "" },
+  { id: "t_u11b",    name: "U11 B",      ageGroup: "u11", level: "B",      sessionsPerWeek: 3, homeRinkId: "rink_civic2",   blackoutDows: [], notes: "" },
+  { id: "t_u11c",    name: "U11 C",      ageGroup: "u11", level: "House",  sessionsPerWeek: 2, homeRinkId: "rink_memorial", blackoutDows: [], notes: "" },
+  { id: "t_u13a",    name: "U13 A",      ageGroup: "u13", level: "A",      sessionsPerWeek: 3, homeRinkId: "rink_civic1",   blackoutDows: [], notes: "" },
+  { id: "t_u13b",    name: "U13 B",      ageGroup: "u13", level: "B",      sessionsPerWeek: 3, homeRinkId: "rink_memorial", blackoutDows: [], notes: "" },
+  { id: "t_u15a",    name: "U15 A",      ageGroup: "u15", level: "A",      sessionsPerWeek: 3, homeRinkId: "rink_civic1",   blackoutDows: [], notes: "" },
+  { id: "t_u15b",    name: "U15 B",      ageGroup: "u15", level: "B",      sessionsPerWeek: 2, homeRinkId: "rink_civic2",   blackoutDows: [], notes: "" },
+  { id: "t_u18a",    name: "U18 A",      ageGroup: "u18", level: "A",      sessionsPerWeek: 3, homeRinkId: "rink_civic1",   blackoutDows: [], notes: "" },
+];
+
+// A representative week of purchased ice, generated for the first Monday of
+// the configured season so a fresh install has something to schedule.
+const SEASON_START = "2026-09-07";  // Monday
+const SEASON_MONTHS = [
+  { y: 2026, m: 8 }, { y: 2026, m: 9 }, { y: 2026, m: 10 }, { y: 2026, m: 11 },
+  { y: 2027, m: 0 }, { y: 2027, m: 1 }, { y: 2027, m: 2 },
+];
+
+// Recurring purchase pattern used to seed the first four weeks of ice.
+const SEED_PATTERN = [
+  { rinkId: "rink_civic1",   dows: [1,2,3,4],   start: "16:30", end: "21:30" },
+  { rinkId: "rink_civic2",   dows: [1,3,5],     start: "17:00", end: "21:00" },
+  { rinkId: "rink_north",    dows: [2,4],       start: "16:30", end: "20:00" },
+  { rinkId: "rink_memorial", dows: [1,2,4],     start: "17:30", end: "21:00" },
+  { rinkId: "rink_civic1",   dows: [6,0],       start: "07:00", end: "15:00" },
+  { rinkId: "rink_civic2",   dows: [6],         start: "08:00", end: "14:00" },
+  { rinkId: "rink_north",    dows: [0],         start: "07:30", end: "13:00" },
+];
+
+// Where the app should open: this week if the season is under way, the
+// start of the season otherwise.
+function initialWeekStart() {
+  const today = weekStartOf(dateStr(new Date()));
+  const last = addDays(SEASON_START, 209);
+  return today >= SEASON_START && today <= last ? today : SEASON_START;
+}
+function initialMonthIdx() {
+  const now = new Date();
+  const i = SEASON_MONTHS.findIndex(m => m.y === now.getFullYear() && m.m === now.getMonth());
+  return i >= 0 ? i : 0;
+}
+
+function buildSeedSlots(weeks = 4) {
+  const out = [];
+  for (let w = 0; w < weeks; w++) {
+    for (let d = 0; d < 7; d++) {
+      const ds = addDays(SEASON_START, w * 7 + d);
+      const dow = dowOf(ds);
+      for (const p of SEED_PATTERN) {
+        if (!p.dows.includes(dow)) continue;
+        out.push({
+          id: uid("slot"),
+          rinkId: p.rinkId,
+          date: ds,
+          start: p.start,
+          end: p.end,
+          note: "",
+        });
+      }
+    }
+  }
+  return out;
+}
+
+// ══════════════════════════════════════════════════
+// PERSISTENCE
+// localStorage is always the working store. If the optional `ice_data`
+// table exists in Supabase we also mirror every write there and hydrate
+// from it on load, which is what makes the schedule shared. If it doesn't
+// exist (or the network is down) `cloudReady` stays false and the app runs
+// local-only — no error, just a "Local only" badge in the header.
+// ══════════════════════════════════════════════════
+const KEY_TO_COLUMN = {
+  "ice_rinks":       "rinks",
+  "ice_teams":       "teams",
+  "ice_slots":       "slots",
+  "ice_assignments": "assignments",
+  "ice_rules":       "age_rules",
+  "ice_meta":        "meta",
+};
+const cloudCache = {};
+let cloudReady = false;
+let cloudChecked = false;
+
+async function hydrateFromCloud() {
+  if (!supabase) { cloudChecked = true; return { ok: false, reason: "Supabase SDK unavailable" }; }
+  try {
+    const { data, error } = await supabase.from("ice_data").select("*").eq("id", 1).maybeSingle();
+    if (error) return { ok: false, reason: error.message };
+    if (!data) return { ok: false, reason: "no row" };
+    for (const [key, column] of Object.entries(KEY_TO_COLUMN)) {
+      if (data[column] != null) cloudCache[key] = data[column];
+    }
+    cloudReady = true;
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, reason: e?.message || String(e) };
+  } finally {
+    cloudChecked = true;
+  }
+}
+
+async function pushToCloud(key, value) {
+  const column = KEY_TO_COLUMN[key];
+  if (!column || !cloudReady) return { ok: true, skipped: true };
+  try {
+    const { error } = await supabase.from("ice_data").update({ [column]: value }).eq("id", 1);
+    if (error) return { ok: false, reason: error.message };
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, reason: e?.message || String(e) };
+  }
+}
+
+// Set by App so the save layer can surface cloud write failures in the UI
+// without every caller having to thread a callback through.
+let onCloudResult = () => {};
+
+function load(k, fb) {
+  if (cloudReady && cloudCache[k] !== undefined) return cloudCache[k];
+  try {
+    const raw = localStorage.getItem(k);
+    return raw ? JSON.parse(raw) : fb;
+  } catch { return fb; }
+}
+
+function save(k, v) {
+  try { localStorage.setItem(k, JSON.stringify(v)); } catch {}
+  if (cloudReady) {
+    cloudCache[k] = v;
+    pushToCloud(k, v).then(r => {
+      if (!r.ok) onCloudResult({ ok: false, message: r.reason });
+      else if (!r.skipped) onCloudResult({ ok: true });
+    });
+  }
+}
+
+// ══════════════════════════════════════════════════
+// RULE ACCESS
+// Rules are stored keyed by age group. `windowFor` resolves the right
+// weekday/weekend window and returns everything in minutes so the solver
+// never has to think about strings.
+// ══════════════════════════════════════════════════
+function ruleFor(rules, ageGroup) {
+  return rules[ageGroup] || DEFAULT_RULES[ageGroup] || DEFAULT_RULES.u11;
+}
+function windowFor(rules, ageGroup, ds) {
+  const r = ruleFor(rules, ageGroup);
+  const w = r[dayTypeOf(ds)] || r.weekday;
+  return {
+    earliest: toMin(w.earliest),
+    latest: toMin(w.latest),
+    duration: r.durationMin,
+    allowShared: !!r.allowShared,
+    maxPerDay: r.maxPerDay ?? 1,
+    maxPerWeek: r.maxPerWeek ?? 4,
+  };
+}
+// How much room a team has to be placed on a given day, in minutes. Used to
+// order the solver's work: the team with the least slack goes first.
+function windowWidth(rules, ageGroup, ds) {
+  const w = windowFor(rules, ageGroup, ds);
+  return Math.max(0, w.latest - w.earliest);
+}
+
+// ══════════════════════════════════════════════════
+// SCHEDULING ENGINE
+//
+// The shape of the problem: a set of *slots* (blocks of ice an association
+// has purchased at a rink on a date) and a set of *requests* (team X needs
+// N ice times this week). A request can be satisfied anywhere inside a slot
+// as long as the whole ice time fits, starts inside the team's age-band
+// window, and doesn't collide with anything already booked.
+//
+// The solver is greedy-with-restarts, the same approach the lineup app uses
+// for defensive positions: order the requests hardest-first, place each one
+// at its lowest-cost feasible spot with a little random jitter so repeated
+// runs explore different orderings, score the finished schedule, and keep
+// the best of N runs.
+// ══════════════════════════════════════════════════
+
+// Everything the solver and the validator need, derived once per call.
+function buildContext({ teams, rinks, slots, rules }) {
+  return {
+    teamMap: Object.fromEntries(teams.map(t => [t.id, t])),
+    rinkMap: Object.fromEntries(rinks.map(r => [r.id, r])),
+    slotMap: Object.fromEntries(slots.map(s => [s.id, s])),
+    rules,
+  };
+}
+
+// All assignments that live inside a given slot, sorted by start time.
+function assignmentsInSlot(assignments, slotId) {
+  return assignments
+    .filter(a => a.slotId === slotId)
+    .sort((a, b) => toMin(a.start) - toMin(b.start));
+}
+
+// Free intervals remaining in a slot, as [{start,end}] in minutes.
+function freeSegments(slot, assignments) {
+  const busy = assignmentsInSlot(assignments, slot.id)
+    .map(a => ({ s: toMin(a.start), e: toMin(a.end) }));
+  const out = [];
+  let cursor = toMin(slot.start);
+  const slotEnd = toMin(slot.end);
+  for (const b of busy) {
+    if (b.s > cursor) out.push({ start: cursor, end: Math.min(b.s, slotEnd) });
+    cursor = Math.max(cursor, b.e);
+  }
+  if (cursor < slotEnd) out.push({ start: cursor, end: slotEnd });
+  return out.filter(seg => seg.end > seg.start);
+}
+
+// Minutes of a slot that are booked / free / stranded (free but too short
+// for anyone to use).
+function slotUtilization(slot, assignments) {
+  const total = toMin(slot.end) - toMin(slot.start);
+  const free = freeSegments(slot, assignments);
+  const freeMin = free.reduce((n, s) => n + (s.end - s.start), 0);
+  const stranded = free.reduce((n, s) => n + (s.end - s.start < MIN_USEFUL_BLOCK ? s.end - s.start : 0), 0);
+  return { total, booked: total - freeMin, free: freeMin, stranded, segments: free };
+}
+
+// Does this team already have ice that overlaps [start,end) on this date?
+function teamBusy(assignments, teamId, ds, start, end, ignoreId) {
+  return assignments.some(a =>
+    a.id !== ignoreId &&
+    a.date === ds &&
+    (a.teamIds || []).includes(teamId) &&
+    overlaps(toMin(a.start), toMin(a.end), start, end)
+  );
+}
+function teamSessionsOnDate(assignments, teamId, ds) {
+  return assignments.filter(a => a.date === ds && (a.teamIds || []).includes(teamId)).length;
+}
+function teamSessions(assignments, teamId) {
+  return assignments.filter(a => (a.teamIds || []).includes(teamId));
+}
+
+// Every legal placement for one team inside the given slots. `mode` is
+// "new" for a fresh ice time carved out of free space, or "join" for
+// sharing an existing ice time with another team (half-ice / cross-ice for
+// the youngest bands).
+function candidatePlacements({ team, slots, assignments, rules, dates }) {
+  const out = [];
+  const blackoutDows = team.blackoutDows || [];
+  const blackoutDates = team.blackoutDates || [];
+
+  for (const slot of slots) {
+    if (dates && !dates.includes(slot.date)) continue;
+    if (slot.blocked) continue;   // tournament / public skate / maintenance
+    if (blackoutDows.includes(dowOf(slot.date))) continue;
+    if (blackoutDates.includes(slot.date)) continue;
+
+    const w = windowFor(rules, team.ageGroup, slot.date);
+    const slotStart = toMin(slot.start), slotEnd = toMin(slot.end);
+
+    // ── Sharing: join an existing ice time of exactly the same length,
+    // when both bands allow it and the ice time still has room.
+    if (w.allowShared) {
+      for (const a of assignmentsInSlot(assignments, slot.id)) {
+        if ((a.teamIds || []).length >= 2) continue;
+        if (toMin(a.end) - toMin(a.start) !== w.duration) continue;
+        const other = a.teamIds?.[0];
+        if (!other) continue;
+        const start = toMin(a.start);
+        if (start < Math.max(slotStart, w.earliest) || start > w.latest) continue;
+        if (teamBusy(assignments, team.id, slot.date, start, start + w.duration)) continue;
+        out.push({ mode: "join", joinId: a.id, slotId: slot.id, rinkId: slot.rinkId, date: slot.date, start, end: start + w.duration, otherTeamId: other });
+      }
+    }
+
+    // ── Fresh placements inside each free segment of the slot.
+    for (const seg of freeSegments(slot, assignments)) {
+      const lo = Math.max(seg.start, w.earliest);
+      const hi = Math.min(seg.end - w.duration, w.latest);
+      if (hi < lo) continue;
+      // Align to the STEP grid, but always include the two placements that
+      // waste nothing: flush to the start of the segment and flush to its
+      // end. Those are the ones that keep ice from getting stranded.
+      const starts = new Set();
+      if (lo % STEP === 0) starts.add(lo);
+      for (let t = Math.ceil(lo / STEP) * STEP; t <= hi; t += STEP) starts.add(t);
+      starts.add(lo);
+      const flushEnd = seg.end - w.duration;
+      if (flushEnd >= lo && flushEnd <= hi) starts.add(flushEnd);
+      for (const start of starts) {
+        if (start < lo || start > hi) continue;
+        if (teamBusy(assignments, team.id, slot.date, start, start + w.duration)) continue;
+        out.push({ mode: "new", slotId: slot.id, rinkId: slot.rinkId, date: slot.date, start, end: start + w.duration, segEnd: seg.end, segStart: seg.start });
+      }
+    }
+  }
+  return out;
+}
+
+// Cost of a placement, lower is better. The terms, roughly in order of how
+// much they matter:
+//   • stranded ice — a placement that leaves an unusable sliver behind is
+//     the single most expensive mistake a scheduler can make
+//   • fairness — teams that already hold prime ice pay to take more; teams
+//     already stuck with off-peak ice get a discount on prime
+//   • spacing — two ice times in a day is bad, back-to-back days is meh
+//   • home rink and packing preferences are tie-breakers
+function placementCost(p, { team, state, rules }) {
+  let cost = 0;
+  const quality = slotQuality(p.date, p.start);
+
+  if (p.mode === "join") {
+    // Sharing costs nothing extra and consumes no new ice — reward it.
+    cost -= 4;
+  } else {
+    // Stranding: what's left of this free segment once we take our bite.
+    const before = p.start - p.segStart;
+    const after = p.segEnd - p.end;
+    for (const gap of [before, after]) {
+      if (gap === 0) continue;
+      if (gap < MIN_USEFUL_BLOCK) cost += 0.06 * gap;  // dead ice, priced per minute
+      else cost += 0.004 * gap;                        // usable, mild packing bias
+    }
+  }
+
+  // Fairness: compare this team's holdings against the association average
+  // so far. `state.primeCount` / `state.roughCount` are running totals.
+  const primeAvg = state.primeAvg || 0;
+  const roughAvg = state.roughAvg || 0;
+  const myPrime = state.primeCount[team.id] || 0;
+  const myRough = state.roughCount[team.id] || 0;
+  if (quality === "prime") cost += 2.5 * Math.max(0, myPrime - primeAvg);
+  if (quality === "rough") cost += 2.5 * Math.max(0, myRough - roughAvg) + 1.2;
+
+  // Younger bands lose the room badly on late ice; the window already
+  // enforces the hard limit, but bias them toward the front of it.
+  const w = windowFor(rules, team.ageGroup, p.date);
+  const windowSpan = Math.max(1, w.latest - w.earliest);
+  const posInWindow = (p.start - w.earliest) / windowSpan;
+  cost += 0.8 * posInWindow;
+
+  // Spacing.
+  const sameDay = teamSessionsOnDate(state.assignments, team.id, p.date);
+  if (sameDay > 0) cost += 6;
+  const w2 = windowFor(rules, team.ageGroup, p.date);
+  if (sameDay >= w2.maxPerDay) cost += 12;
+  if (teamSessionsOnDate(state.assignments, team.id, addDays(p.date, -1)) > 0) cost += 1.2;
+  if (teamSessionsOnDate(state.assignments, team.id, addDays(p.date, 1)) > 0) cost += 1.2;
+
+  // Rink familiarity.
+  if (team.homeRinkId && p.rinkId !== team.homeRinkId) cost += 0.9;
+
+  return cost;
+}
+
+// One greedy pass. `seed` drives the jitter so runs differ.
+function solveOnce({ teams, slots, rules, requests, locked, rand }) {
+  const assignments = locked.map(a => ({ ...a, teamIds: [...(a.teamIds || [])] }));
+  const primeCount = {}, roughCount = {};
+  for (const t of teams) { primeCount[t.id] = 0; roughCount[t.id] = 0; }
+  for (const a of assignments) {
+    const q = slotQuality(a.date, toMin(a.start));
+    for (const tid of a.teamIds || []) {
+      if (q === "prime") primeCount[tid] = (primeCount[tid] || 0) + 1;
+      if (q === "rough") roughCount[tid] = (roughCount[tid] || 0) + 1;
+    }
+  }
+
+  const unplaced = [];
+  const state = { assignments, primeCount, roughCount, primeAvg: 0, roughAvg: 0 };
+
+  // Hardest-first: the team whose age band has the narrowest start window
+  // has the fewest places to go, so it picks before anyone else. Ties are
+  // broken by remaining need, then randomly.
+  const queue = requests.map((r, i) => ({ ...r, _i: i }));
+  const tightness = {};
+  for (const t of teams) {
+    tightness[t.id] = mean([1,2,3,4,5,6,0].map(d => windowWidth(rules, t.ageGroup, addDays(SEASON_START, d))));
+  }
+
+  let remaining = queue.slice();
+  while (remaining.length) {
+    remaining.sort((a, b) => {
+      const ta = tightness[a.teamId] ?? 999, tb = tightness[b.teamId] ?? 999;
+      if (ta !== tb) return ta - tb;
+      return a._i - b._i;
+    });
+    // Take the tightest request, but jitter which of the equally-tight ones
+    // goes first so restarts actually explore.
+    const headTight = tightness[remaining[0].teamId] ?? 999;
+    const tied = remaining.filter(r => (tightness[r.teamId] ?? 999) === headTight);
+    const req = tied[Math.floor(rand() * tied.length)];
+    remaining = remaining.filter(r => r !== req);
+
+    const team = teams.find(t => t.id === req.teamId);
+    if (!team) continue;
+
+    state.primeAvg = mean(Object.values(primeCount));
+    state.roughAvg = mean(Object.values(roughCount));
+
+    const cands = candidatePlacements({ team, slots, assignments, rules, dates: req.dates });
+    if (!cands.length) { unplaced.push({ ...req, reason: "no open ice inside this team's start window" }); continue; }
+
+    let best = null, bestCost = Infinity;
+    for (const p of cands) {
+      const c = placementCost(p, { team, state, rules }) + rand() * 0.9;
+      if (c < bestCost) { bestCost = c; best = p; }
+    }
+    if (!best) { unplaced.push({ ...req, reason: "no legal placement" }); continue; }
+
+    if (best.mode === "join") {
+      const target = assignments.find(a => a.id === best.joinId);
+      target.teamIds = [...target.teamIds, team.id];
+      target.shared = true;
+    } else {
+      assignments.push({
+        id: uid("ice"),
+        slotId: best.slotId,
+        rinkId: best.rinkId,
+        date: best.date,
+        start: toHHMM(best.start),
+        end: toHHMM(best.end),
+        teamIds: [team.id],
+        kind: req.kind || "practice",
+        locked: false,
+        shared: false,
+      });
+    }
+    const q = slotQuality(best.date, best.start);
+    if (q === "prime") primeCount[team.id] = (primeCount[team.id] || 0) + 1;
+    if (q === "rough") roughCount[team.id] = (roughCount[team.id] || 0) + 1;
+  }
+
+  return { assignments, unplaced, primeCount, roughCount };
+}
+
+// Whole-schedule score. Lower is better; unplaced requests dominate.
+function scoreSolution(sol, { slots, teams }) {
+  let score = sol.unplaced.length * 1000;
+
+  // Stranded ice across every slot we touched.
+  for (const slot of slots) {
+    const u = slotUtilization(slot, sol.assignments);
+    score += u.stranded * 0.4;
+  }
+  // Fairness: variance in prime and off-peak holdings.
+  const primes = teams.map(t => sol.primeCount[t.id] || 0);
+  const roughs = teams.map(t => sol.roughCount[t.id] || 0);
+  const pm = mean(primes), rm = mean(roughs);
+  score += mean(primes.map(v => (v - pm) ** 2)) * 8;
+  score += mean(roughs.map(v => (v - rm) ** 2)) * 8;
+
+  // Same-day doubling up.
+  for (const t of teams) {
+    const byDate = {};
+    for (const a of teamSessions(sol.assignments, t.id)) byDate[a.date] = (byDate[a.date] || 0) + 1;
+    for (const n of Object.values(byDate)) if (n > 1) score += (n - 1) * 15;
+  }
+  return score;
+}
+
+// Deterministic-ish PRNG so a given seed reproduces a given schedule.
+function makeRand(seed) {
+  let s = seed >>> 0;
+  return function () {
+    s = (s * 1664525 + 1013904223) >>> 0;
+    return s / 4294967296;
+  };
+}
+
+// Public entry point. Returns the best of `runs` greedy attempts.
+function solveSchedule({ teams, slots, rules, requests, locked = [], runs = 60, seed = 0 }) {
+  let best = null, bestScore = Infinity;
+  for (let i = 0; i < runs; i++) {
+    const sol = solveOnce({ teams, slots, rules, requests, locked, rand: makeRand((seed + i) * 7919 + 13) });
+    const score = scoreSolution(sol, { slots, teams });
+    if (score < bestScore) { bestScore = score; best = sol; }
+    if (bestScore === 0) break;
+  }
+  return { ...best, score: bestScore, runs };
+}
+
+// ══════════════════════════════════════════════════
+// VALIDATION
+// Same philosophy as the lineup app: warn, don't block. Anything the
+// solver produced should come back clean; the point of this pass is to
+// catch what hand-editing breaks afterwards. Severity drives the colour
+// and the sort order, nothing else.
+// ══════════════════════════════════════════════════
+function validateSchedule({ assignments, teams, slots, rinks, rules, dates, requests }) {
+  const issues = [];
+  const add = (severity, message, extra = {}) => issues.push({ severity, message, ...extra });
+  const teamMap = Object.fromEntries(teams.map(t => [t.id, t]));
+  const rinkMap = Object.fromEntries(rinks.map(r => [r.id, r]));
+  const slotMap = Object.fromEntries(slots.map(s => [s.id, s]));
+  const inRange = dates ? assignments.filter(a => dates.includes(a.date)) : assignments;
+
+  // ── Hard conflicts: same sheet of ice, two ice times.
+  const byRinkDate = {};
+  for (const a of inRange) {
+    const k = `${a.rinkId}|${a.date}`;
+    (byRinkDate[k] = byRinkDate[k] || []).push(a);
+  }
+  for (const [k, list] of Object.entries(byRinkDate)) {
+    const sorted = [...list].sort((x, y) => toMin(x.start) - toMin(y.start));
+    for (let i = 1; i < sorted.length; i++) {
+      const prev = sorted[i - 1], cur = sorted[i];
+      if (overlaps(toMin(prev.start), toMin(prev.end), toMin(cur.start), toMin(cur.end))) {
+        const rink = rinkMap[cur.rinkId];
+        add("error", `${rink?.short || "Rink"} ${fmtDate(cur.date)} — two ice times overlap (${fmtRange(toMin(prev.start), toMin(prev.end))} and ${fmtRange(toMin(cur.start), toMin(cur.end))})`, { assignmentId: cur.id });
+      }
+    }
+  }
+
+  // ── Hard conflicts: one team, two places.
+  for (const t of teams) {
+    const mine = inRange.filter(a => (a.teamIds || []).includes(t.id)).sort((x, y) => toMin(x.start) - toMin(y.start));
+    const byDate = {};
+    for (const a of mine) (byDate[a.date] = byDate[a.date] || []).push(a);
+    for (const [ds, list] of Object.entries(byDate)) {
+      for (let i = 1; i < list.length; i++) {
+        if (overlaps(toMin(list[i-1].start), toMin(list[i-1].end), toMin(list[i].start), toMin(list[i].end))) {
+          add("error", `${t.name} is double-booked on ${fmtDate(ds)}`, { assignmentId: list[i].id, teamId: t.id });
+        }
+      }
+      const w = windowFor(rules, t.ageGroup, ds);
+      if (list.length > w.maxPerDay) {
+        add("warn", `${t.name} has ${list.length} ice times on ${fmtDate(ds)} (max ${w.maxPerDay})`, { teamId: t.id });
+      }
+    }
+  }
+
+  // ── Window and duration rules.
+  for (const a of inRange) {
+    const start = toMin(a.start), end = toMin(a.end);
+    for (const tid of a.teamIds || []) {
+      const t = teamMap[tid];
+      if (!t) continue;
+      const w = windowFor(rules, t.ageGroup, a.date);
+      if (start < w.earliest) {
+        add("error", `${t.name} starts ${fmtTime(start)} on ${fmtDate(a.date)} — earlier than the ${AGE_MAP[t.ageGroup]?.label} ${dayTypeOf(a.date)} limit of ${fmtTime(w.earliest)}`, { assignmentId: a.id, teamId: tid });
+      }
+      if (start > w.latest) {
+        add("error", `${t.name} starts ${fmtTime(start)} on ${fmtDate(a.date)} — later than the ${AGE_MAP[t.ageGroup]?.label} ${dayTypeOf(a.date)} limit of ${fmtTime(w.latest)}`, { assignmentId: a.id, teamId: tid });
+      }
+      if (end - start !== w.duration) {
+        add("warn", `${t.name} on ${fmtDate(a.date)} is ${fmtDur(end - start)} — ${AGE_MAP[t.ageGroup]?.label} ice times are normally ${fmtDur(w.duration)}`, { assignmentId: a.id, teamId: tid });
+      }
+    }
+    if ((a.teamIds || []).length > 1) {
+      const bands = (a.teamIds || []).map(tid => teamMap[tid]?.ageGroup);
+      const allShare = bands.every(b => b && ruleFor(rules, b).allowShared);
+      if (!allShare) {
+        add("warn", `Shared ice on ${fmtDate(a.date)} includes a team whose age group isn't set up for shared ice`, { assignmentId: a.id });
+      }
+    }
+    // Did a hand-edit push an ice time outside the block it was carved from?
+    const slot = slotMap[a.slotId];
+    if (slot && (start < toMin(slot.start) || end > toMin(slot.end))) {
+      add("error", `${fmtDate(a.date)} ${fmtRange(start, end)} runs outside the purchased block at ${rinkMap[a.rinkId]?.short || "the rink"} (${fmtRange(toMin(slot.start), toMin(slot.end))})`, { assignmentId: a.id });
+    }
+    if (!slot) {
+      add("warn", `An ice time on ${fmtDate(a.date)} isn't attached to a purchased block`, { assignmentId: a.id });
+    }
+  }
+
+  // ── Team blackouts.
+  for (const a of inRange) {
+    for (const tid of a.teamIds || []) {
+      const t = teamMap[tid];
+      if (!t) continue;
+      if ((t.blackoutDows || []).includes(dowOf(a.date))) {
+        add("warn", `${t.name} is scheduled on ${DOW_LONG[dowOf(a.date)]} but doesn't skate that day`, { assignmentId: a.id, teamId: tid });
+      }
+      if ((t.blackoutDates || []).includes(a.date)) {
+        add("warn", `${t.name} is scheduled on ${fmtDate(a.date)}, one of its blackout dates`, { assignmentId: a.id, teamId: tid });
+      }
+    }
+  }
+
+  // ── Coverage against what was asked for.
+  if (requests && requests.length) {
+    const need = {};
+    for (const r of requests) need[r.teamId] = (need[r.teamId] || 0) + 1;
+    for (const [tid, n] of Object.entries(need)) {
+      const got = inRange.filter(a => (a.teamIds || []).includes(tid)).length;
+      const t = teamMap[tid];
+      if (!t) continue;
+      if (got < n) add("warn", `${t.name} has ${got} of ${n} requested ice times`, { teamId: tid });
+      if (got > n) add("info", `${t.name} has ${got} ice times, ${got - n} more than requested`, { teamId: tid });
+    }
+  }
+
+  // ── Ice nobody is using.
+  const rangeSlots = dates ? slots.filter(s => dates.includes(s.date)) : slots;
+  let strandedTotal = 0, openTotal = 0;
+  for (const slot of rangeSlots) {
+    const u = slotUtilization(slot, inRange);
+    strandedTotal += u.stranded;
+    openTotal += u.free - u.stranded;
+  }
+  if (strandedTotal > 0) {
+    add("info", `${fmtDur(strandedTotal)} of ice is stranded in gaps too short to use`);
+  }
+  if (openTotal >= MIN_USEFUL_BLOCK) {
+    add("info", `${fmtDur(openTotal)} of ice is still open and bookable`);
+  }
+
+  const order = { error: 0, warn: 1, info: 2 };
+  issues.sort((a, b) => order[a.severity] - order[b.severity]);
+  return issues;
+}
+
+// ══════════════════════════════════════════════════
+// SHARED STYLES
+// Mutated in place by applyTheme — see the note there.
+// ══════════════════════════════════════════════════
+const chipStyle = { fontFamily: FONT, fontSize: 13, padding: "5px 12px", borderRadius: 6, borderWidth: 1, borderStyle: "solid", borderColor: C.border, cursor: "pointer", background: C.surface, color: C.text, fontWeight: 500 };
+const miniChipStyle = { ...chipStyle, fontSize: 11, padding: "3px 8px" };
+const thStyle = { padding: "10px 8px", fontSize: 12, fontWeight: 600, color: C.textMuted, borderBottom: `2px solid ${C.border}`, background: C.surfaceAlt, textAlign: "center", whiteSpace: "nowrap" };
+const tdStyle = { padding: "8px 10px", borderBottom: `1px solid ${C.borderLight}`, whiteSpace: "nowrap" };
+const inputStyle = { background: C.surfaceAlt, border: `1px solid ${C.border}`, color: C.text, padding: "8px 12px", borderRadius: 6, fontFamily: FONT, fontSize: 14, outline: "none" };
+
+function btn() { return { background: C.surface, borderWidth: 1, borderStyle: "solid", borderColor: C.border, color: C.text, padding: "8px 14px", borderRadius: 6, fontFamily: FONT, fontSize: 13, fontWeight: 500, cursor: "pointer" }; }
+function primaryBtn() { return { ...btn(), background: C.accent, borderColor: C.accent, color: C.onAccent, fontWeight: 600 }; }
+function dangerBtn() { return { ...btn(), borderColor: C.red, color: C.redText }; }
+function smallBtn() { return { ...btn(), padding: "5px 10px", fontSize: 12 }; }
+
+// ══════════════════════════════════════════════════
+// UI ATOMS
+// ══════════════════════════════════════════════════
+function Modal({ title, onClose, children, width = 520, footer }) {
+  useEffect(() => {
+    const onKey = e => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  return (
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.4)", display: "flex", alignItems: "flex-start", justifyContent: "center", padding: 16, zIndex: 100, overflowY: "auto" }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: C.surface, borderRadius: 10, border: `1px solid ${C.border}`, width: "100%", maxWidth: width, marginTop: 40, marginBottom: 40, boxShadow: "0 10px 40px rgba(0,0,0,0.18)" }}>
+        <div style={{ padding: "14px 18px", borderBottom: `1px solid ${C.borderLight}`, display: "flex", alignItems: "center" }}>
+          <span style={{ fontFamily: DISPLAY, fontSize: 17, fontWeight: 700, color: C.text }}>{title}</span>
+          <button onClick={onClose} style={{ marginLeft: "auto", background: "transparent", border: "none", color: C.textMuted, fontSize: 20, lineHeight: 1, cursor: "pointer", fontFamily: FONT }}>×</button>
+        </div>
+        <div style={{ padding: 18 }}>{children}</div>
+        {footer && <div style={{ padding: "12px 18px", borderTop: `1px solid ${C.borderLight}`, display: "flex", gap: 8, justifyContent: "flex-end", flexWrap: "wrap" }}>{footer}</div>}
+      </div>
+    </div>
+  );
+}
+
+function Field({ label, hint, children, style }) {
+  return (
+    <div style={{ marginBottom: 12, ...style }}>
+      <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: C.textMuted, marginBottom: 5 }}>{label}</label>
+      {children}
+      {hint && <div style={{ fontSize: 11, color: C.textLight, marginTop: 4, lineHeight: 1.4 }}>{hint}</div>}
+    </div>
+  );
+}
+
+function SectionCard({ title, subtitle, right, children, pad = 16 }) {
+  return (
+    <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, marginBottom: 16, overflow: "hidden" }}>
+      {(title || right) && (
+        <div style={{ padding: "12px 16px", borderBottom: `1px solid ${C.borderLight}`, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <div>
+            <div style={{ fontFamily: DISPLAY, fontSize: 16, fontWeight: 700, color: C.text }}>{title}</div>
+            {subtitle && <div style={{ fontSize: 12, color: C.textMuted, marginTop: 2 }}>{subtitle}</div>}
+          </div>
+          {right && <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>{right}</div>}
+        </div>
+      )}
+      <div style={{ padding: pad }}>{children}</div>
+    </div>
+  );
+}
+
+function AgeChip({ ageGroup, size = 11 }) {
+  const a = AGE_MAP[ageGroup];
+  return (
+    <span style={{ fontSize: size, fontWeight: 700, padding: "1px 6px", borderRadius: 4, background: BAND_BG[ageGroup] || C.surfaceAlt, color: C.text, border: `1px solid ${C.borderLight}` }}>
+      {a?.label || ageGroup}
+    </span>
+  );
+}
+
+function QualityDot({ quality }) {
+  const color = quality === "prime" ? C.green : quality === "rough" ? C.orange : C.textLight;
+  return <span title={QUALITY_LABEL[quality]} style={{ display: "inline-block", width: 7, height: 7, borderRadius: "50%", background: color }} />;
+}
+
+// The shared-passphrase speed bump, ported straight across from the lineup
+// app: type the phrase, tick the "everyone sees this" box, confirm.
+function EditGate({ open, action, onConfirm, onCancel }) {
+  const [phrase, setPhrase] = useState("");
+  const [ack, setAck] = useState(false);
+  const [err, setErr] = useState("");
+  useEffect(() => { if (open) { setPhrase(""); setAck(false); setErr(""); } }, [open]);
+  if (!open) return null;
+  const submit = () => {
+    if (phrase.trim().toLowerCase() !== EDIT_PASSPHRASE) { setErr("That's not the passphrase."); return; }
+    if (!ack) { setErr("Tick the box to confirm."); return; }
+    onConfirm();
+  };
+  return (
+    <Modal title="Confirm shared change" onClose={onCancel} width={440}
+      footer={<>
+        <button onClick={onCancel} style={btn()}>Cancel</button>
+        <button onClick={submit} style={primaryBtn()}>Confirm</button>
+      </>}>
+      <div style={{ fontSize: 13, color: C.text, lineHeight: 1.5, marginBottom: 14 }}>
+        <strong>{action}</strong> — this goes out to everyone with the link.
+      </div>
+      <Field label="Passphrase">
+        <input type="password" value={phrase} autoFocus
+          onChange={e => { setPhrase(e.target.value); setErr(""); }}
+          onKeyDown={e => { if (e.key === "Enter") submit(); }}
+          style={{ ...inputStyle, width: "100%" }} />
+      </Field>
+      <label style={{ display: "flex", gap: 8, alignItems: "flex-start", fontSize: 12, color: C.textMuted, cursor: "pointer" }}>
+        <input type="checkbox" checked={ack} onChange={e => { setAck(e.target.checked); setErr(""); }} style={{ marginTop: 2 }} />
+        <span>I understand this changes the schedule for every coach and rink scheduler.</span>
+      </label>
+      {err && <div style={{ marginTop: 10, fontSize: 12, color: C.redText }}>{err}</div>}
+    </Modal>
+  );
+}
+
+// ══════════════════════════════════════════════════
+// TAB 1 — ICE INVENTORY
+// The calendar of ice the association has actually bought. Nothing can be
+// scheduled that doesn't exist here first, so this is the tab everything
+// else depends on. Blocks can be added one at a time or, far more usefully,
+// as a recurring weekly pattern across a date range.
+// ══════════════════════════════════════════════════
+
+function SlotEditorModal({ slot, rinks, onSave, onDelete, onClose }) {
+  const [draft, setDraft] = useState(() => ({
+    rinkId: rinks[0]?.id || "",
+    date: SEASON_START,
+    start: "17:00",
+    end: "21:00",
+    note: "",
+    blocked: false,
+    blockLabel: "",
+    ...slot,
+  }));
+  const [err, setErr] = useState("");
+  const set = (k, v) => setDraft(d => ({ ...d, [k]: v }));
+  const submit = () => {
+    if (!draft.rinkId) return setErr("Pick a rink.");
+    if (!draft.date) return setErr("Pick a date.");
+    if (toMin(draft.end) <= toMin(draft.start)) return setErr("End time has to be after the start time.");
+    onSave({ ...draft, id: draft.id || uid("slot") });
+  };
+  const len = toMin(draft.end) - toMin(draft.start);
+  return (
+    <Modal title={slot?.id ? "Edit ice block" : "Add ice block"} onClose={onClose} width={460}
+      footer={<>
+        {slot?.id && <button onClick={() => onDelete(slot.id)} style={{ ...dangerBtn(), marginRight: "auto" }}>Delete</button>}
+        <button onClick={onClose} style={btn()}>Cancel</button>
+        <button onClick={submit} style={primaryBtn()}>Save block</button>
+      </>}>
+      <Field label="Rink">
+        <select value={draft.rinkId} onChange={e => set("rinkId", e.target.value)} style={{ ...inputStyle, width: "100%" }}>
+          {rinks.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+        </select>
+      </Field>
+      <Field label="Date">
+        <input type="date" value={draft.date} onChange={e => set("date", e.target.value)} style={{ ...inputStyle, width: "100%" }} />
+      </Field>
+      <div style={{ display: "flex", gap: 10 }}>
+        <Field label="Start" style={{ flex: 1 }}>
+          <input type="time" value={draft.start} step={900} onChange={e => set("start", e.target.value)} style={{ ...inputStyle, width: "100%" }} />
+        </Field>
+        <Field label="End" style={{ flex: 1 }}>
+          <input type="time" value={draft.end} step={900} onChange={e => set("end", e.target.value)} style={{ ...inputStyle, width: "100%" }} />
+        </Field>
+      </div>
+      {len > 0 && <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 12 }}>{fmtDur(len)} of ice.</div>}
+      <Field label="Note" hint="Optional — shows on the block in the calendar.">
+        <input value={draft.note || ""} onChange={e => set("note", e.target.value)} placeholder="e.g. contract ice, invoice #204" style={{ ...inputStyle, width: "100%" }} />
+      </Field>
+      <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13, color: C.text, cursor: "pointer", marginTop: 4 }}>
+        <input type="checkbox" checked={!!draft.blocked} onChange={e => set("blocked", e.target.checked)} />
+        <span>Blocked — reserved for something else, don't schedule teams here</span>
+      </label>
+      {draft.blocked && (
+        <Field label="Blocked for" style={{ marginTop: 10 }}>
+          <input value={draft.blockLabel || ""} onChange={e => set("blockLabel", e.target.value)} placeholder="e.g. U13 tournament, public skate" style={{ ...inputStyle, width: "100%" }} />
+        </Field>
+      )}
+      {err && <div style={{ marginTop: 10, fontSize: 12, color: C.redText }}>{err}</div>}
+    </Modal>
+  );
+}
+
+function RecurringIceModal({ rinks, onCreate, onClose }) {
+  const [draft, setDraft] = useState({
+    rinkId: rinks[0]?.id || "",
+    dows: [2],
+    start: "17:00",
+    end: "21:00",
+    from: SEASON_START,
+    to: addDays(SEASON_START, 77),   // 12 weeks
+    note: "",
+  });
+  const [err, setErr] = useState("");
+  const set = (k, v) => setDraft(d => ({ ...d, [k]: v }));
+  const toggleDow = d => setDraft(x => ({ ...x, dows: x.dows.includes(d) ? x.dows.filter(v => v !== d) : [...x.dows, d].sort() }));
+
+  const preview = useMemo(() => {
+    if (!draft.from || !draft.to || toMin(draft.end) <= toMin(draft.start)) return [];
+    const out = [];
+    let ds = draft.from;
+    let guard = 0;
+    while (ds <= draft.to && guard++ < 500) {
+      if (draft.dows.includes(dowOf(ds))) out.push(ds);
+      ds = addDays(ds, 1);
+    }
+    return out;
+  }, [draft]);
+
+  const submit = () => {
+    if (!draft.rinkId) return setErr("Pick a rink.");
+    if (!draft.dows.length) return setErr("Pick at least one day of the week.");
+    if (toMin(draft.end) <= toMin(draft.start)) return setErr("End time has to be after the start time.");
+    if (!preview.length) return setErr("That pattern doesn't land on any dates.");
+    onCreate(preview.map(date => ({
+      id: uid("slot"), rinkId: draft.rinkId, date,
+      start: draft.start, end: draft.end, note: draft.note, blocked: false,
+    })));
+  };
+
+  const hours = preview.length * (toMin(draft.end) - toMin(draft.start)) / 60;
+  return (
+    <Modal title="Add recurring ice" onClose={onClose} width={500}
+      footer={<>
+        <button onClick={onClose} style={btn()}>Cancel</button>
+        <button onClick={submit} style={primaryBtn()}>Add {preview.length} block{preview.length === 1 ? "" : "s"}</button>
+      </>}>
+      <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 14, lineHeight: 1.5 }}>
+        Set the weekly pattern once — every Tuesday 5–9p at Civic 1, say — and it repeats across the date range.
+        Individual blocks can be edited or deleted afterwards without touching the rest.
+      </div>
+      <Field label="Rink">
+        <select value={draft.rinkId} onChange={e => set("rinkId", e.target.value)} style={{ ...inputStyle, width: "100%" }}>
+          {rinks.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+        </select>
+      </Field>
+      <Field label="Days of the week">
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {DOW_SHORT.map((d, i) => (
+            <button key={i} onClick={() => toggleDow(i)} style={{
+              ...miniChipStyle, padding: "6px 10px", fontSize: 12,
+              background: draft.dows.includes(i) ? C.accent : C.surface,
+              color: draft.dows.includes(i) ? C.onAccent : C.text,
+              borderColor: draft.dows.includes(i) ? C.accent : C.border,
+              fontWeight: draft.dows.includes(i) ? 600 : 500,
+            }}>{d}</button>
+          ))}
+        </div>
+      </Field>
+      <div style={{ display: "flex", gap: 10 }}>
+        <Field label="Start" style={{ flex: 1 }}>
+          <input type="time" step={900} value={draft.start} onChange={e => set("start", e.target.value)} style={{ ...inputStyle, width: "100%" }} />
+        </Field>
+        <Field label="End" style={{ flex: 1 }}>
+          <input type="time" step={900} value={draft.end} onChange={e => set("end", e.target.value)} style={{ ...inputStyle, width: "100%" }} />
+        </Field>
+      </div>
+      <div style={{ display: "flex", gap: 10 }}>
+        <Field label="From" style={{ flex: 1 }}>
+          <input type="date" value={draft.from} onChange={e => set("from", e.target.value)} style={{ ...inputStyle, width: "100%" }} />
+        </Field>
+        <Field label="Through" style={{ flex: 1 }}>
+          <input type="date" value={draft.to} onChange={e => set("to", e.target.value)} style={{ ...inputStyle, width: "100%" }} />
+        </Field>
+      </div>
+      <Field label="Note">
+        <input value={draft.note} onChange={e => set("note", e.target.value)} placeholder="Optional" style={{ ...inputStyle, width: "100%" }} />
+      </Field>
+      <div style={{ background: C.accentLight, border: `1px solid ${C.border}`, borderRadius: 8, padding: "10px 12px", fontSize: 12, color: C.text }}>
+        {preview.length
+          ? <>Creates <strong>{preview.length}</strong> blocks — <strong>{hours.toFixed(1)} hours</strong> of ice, {fmtDate(preview[0])} through {fmtDate(preview[preview.length - 1])}.</>
+          : "No dates match this pattern yet."}
+      </div>
+      {err && <div style={{ marginTop: 10, fontSize: 12, color: C.redText }}>{err}</div>}
+    </Modal>
+  );
+}
+
+function DayDetailModal({ date, slots, assignments, rinks, teams, onAdd, onEdit, onClose }) {
+  const daySlots = slots.filter(s => s.date === date).sort((a, b) => toMin(a.start) - toMin(b.start));
+  const rinkMap = Object.fromEntries(rinks.map(r => [r.id, r]));
+  const teamMap = Object.fromEntries(teams.map(t => [t.id, t]));
+  return (
+    <Modal title={fmtDateLong(date)} onClose={onClose} width={560}
+      footer={<>
+        <button onClick={onClose} style={btn()}>Close</button>
+        <button onClick={() => onAdd(date)} style={primaryBtn()}>Add ice block</button>
+      </>}>
+      {!daySlots.length && <div style={{ fontSize: 13, color: C.textMuted }}>No ice purchased on this date.</div>}
+      {daySlots.map(slot => {
+        const u = slotUtilization(slot, assignments);
+        const booked = assignmentsInSlot(assignments, slot.id);
+        return (
+          <div key={slot.id} style={{ border: `1px solid ${C.border}`, borderRadius: 8, marginBottom: 10, overflow: "hidden" }}>
+            <div style={{ padding: "10px 12px", background: slot.blocked ? C.orangeLight : C.surfaceAlt, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <strong style={{ fontSize: 13 }}>{rinkMap[slot.rinkId]?.short || "Rink"}</strong>
+              <span style={{ fontSize: 13, color: C.textMuted }}>{fmtRange(toMin(slot.start), toMin(slot.end))}</span>
+              {slot.blocked && <span style={{ fontSize: 11, fontWeight: 600, color: C.orangeText }}>Blocked{slot.blockLabel ? ` — ${slot.blockLabel}` : ""}</span>}
+              <button onClick={() => onEdit(slot)} style={{ ...smallBtn(), marginLeft: "auto" }}>Edit</button>
+            </div>
+            <div style={{ padding: "10px 12px" }}>
+              {!slot.blocked && (
+                <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 8 }}>
+                  {fmtDur(u.booked)} booked · {fmtDur(u.free)} open{u.stranded ? ` · ${fmtDur(u.stranded)} stranded` : ""}
+                </div>
+              )}
+              {booked.map(a => (
+                <div key={a.id} style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 12, padding: "3px 0" }}>
+                  <span style={{ color: C.textMuted, minWidth: 84 }}>{fmtRange(toMin(a.start), toMin(a.end))}</span>
+                  <span style={{ fontWeight: 600 }}>{(a.teamIds || []).map(id => teamMap[id]?.name || "?").join(" + ")}</span>
+                  {a.shared && <span style={{ fontSize: 10, color: C.blueText, fontWeight: 600 }}>SHARED</span>}
+                </div>
+              ))}
+              {!booked.length && !slot.blocked && <div style={{ fontSize: 12, color: C.textLight }}>Nothing scheduled here yet.</div>}
+            </div>
+          </div>
+        );
+      })}
+    </Modal>
+  );
+}
+
+function IceTab({ slots, setSlots, assignments, rinks, teams }) {
+  const [monthIdx, setMonthIdx] = useState(initialMonthIdx);
+  const [editingSlot, setEditingSlot] = useState(null);
+  const [recurringOpen, setRecurringOpen] = useState(false);
+  const [dayOpen, setDayOpen] = useState(null);
+  const rinkMap = useMemo(() => Object.fromEntries(rinks.map(r => [r.id, r])), [rinks]);
+
+  const { y, m } = SEASON_MONTHS[monthIdx];
+  const firstOfMonth = new Date(y, m, 1, 12);
+  const daysInMonth = new Date(y, m + 1, 0).getDate();
+  const leadBlanks = firstOfMonth.getDay();
+
+  const monthDates = useMemo(() => {
+    const out = [];
+    for (let d = 1; d <= daysInMonth; d++) out.push(dateStr(new Date(y, m, d, 12)));
+    return out;
+  }, [y, m, daysInMonth]);
+
+  const byDate = useMemo(() => {
+    const map = {};
+    for (const s of slots) (map[s.date] = map[s.date] || []).push(s);
+    for (const k of Object.keys(map)) map[k].sort((a, b) => toMin(a.start) - toMin(b.start));
+    return map;
+  }, [slots]);
+
+  const monthStats = useMemo(() => {
+    const ms = slots.filter(s => monthDates.includes(s.date));
+    let total = 0, booked = 0, blocked = 0;
+    for (const s of ms) {
+      const len = toMin(s.end) - toMin(s.start);
+      if (s.blocked) { blocked += len; continue; }
+      total += len;
+      booked += slotUtilization(s, assignments).booked;
+    }
+    return { total, booked, blocked, blocks: ms.length };
+  }, [slots, assignments, monthDates]);
+
+  const saveSlot = slot => {
+    setSlots(prev => {
+      const exists = prev.some(s => s.id === slot.id);
+      return exists ? prev.map(s => s.id === slot.id ? slot : s) : [...prev, slot];
+    });
+    setEditingSlot(null);
+  };
+  const deleteSlot = id => {
+    setSlots(prev => prev.filter(s => s.id !== id));
+    setEditingSlot(null);
+  };
+
+  return (
+    <div>
+      <SectionCard
+        title="Ice inventory"
+        subtitle="Every block of ice the association has purchased. Teams can only be scheduled inside these."
+        right={<>
+          <button onClick={() => setRecurringOpen(true)} style={btn()}>Add recurring…</button>
+          <button onClick={() => setEditingSlot({ date: monthDates[0] })} style={primaryBtn()}>Add block</button>
+        </>}
+        pad={0}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "10px 16px", borderBottom: `1px solid ${C.borderLight}` }}>
+          <button onClick={() => setMonthIdx(i => Math.max(0, i - 1))} disabled={monthIdx === 0} style={{ ...smallBtn(), opacity: monthIdx === 0 ? 0.4 : 1 }}>‹</button>
+          <div style={{ fontFamily: DISPLAY, fontSize: 15, fontWeight: 700, minWidth: 150, textAlign: "center" }}>{MONTHS[m]} {y}</div>
+          <button onClick={() => setMonthIdx(i => Math.min(SEASON_MONTHS.length - 1, i + 1))} disabled={monthIdx === SEASON_MONTHS.length - 1} style={{ ...smallBtn(), opacity: monthIdx === SEASON_MONTHS.length - 1 ? 0.4 : 1 }}>›</button>
+          <div style={{ marginLeft: "auto", fontSize: 12, color: C.textMuted, display: "flex", gap: 12, flexWrap: "wrap" }}>
+            <span><strong style={{ color: C.text }}>{fmtDur(monthStats.total)}</strong> purchased</span>
+            <span><strong style={{ color: C.text }}>{monthStats.total ? Math.round(monthStats.booked / monthStats.total * 100) : 0}%</strong> allocated</span>
+            {monthStats.blocked > 0 && <span><strong style={{ color: C.orangeText }}>{fmtDur(monthStats.blocked)}</strong> blocked</span>}
+          </div>
+        </div>
+
+        <div style={{ overflowX: "auto" }}>
+          <div style={{ minWidth: 640 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", background: C.surfaceAlt, borderBottom: `1px solid ${C.border}` }}>
+              {DOW_SHORT.map(d => (
+                <div key={d} style={{ padding: "8px 4px", textAlign: "center", fontSize: 11, fontWeight: 600, color: C.textMuted }}>{d}</div>
+              ))}
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)" }}>
+              {Array.from({ length: leadBlanks }).map((_, i) => (
+                <div key={`b${i}`} style={{ minHeight: 92, borderRight: `1px solid ${C.borderLight}`, borderBottom: `1px solid ${C.borderLight}`, background: C.surfaceAlt }} />
+              ))}
+              {monthDates.map(ds => {
+                const daySlots = byDate[ds] || [];
+                const weekend = isWeekend(ds);
+                return (
+                  <div key={ds} onClick={() => setDayOpen(ds)} style={{
+                    minHeight: 92, padding: 5, cursor: "pointer",
+                    borderRight: `1px solid ${C.borderLight}`, borderBottom: `1px solid ${C.borderLight}`,
+                    background: weekend ? C.surfaceAlt : C.surface,
+                  }}>
+                    <div style={{ fontSize: 11, fontWeight: 600, color: C.textMuted, marginBottom: 3 }}>{parseDate(ds).getDate()}</div>
+                    {daySlots.slice(0, 3).map(s => {
+                      const u = slotUtilization(s, assignments);
+                      const pct = u.total ? u.booked / u.total : 0;
+                      return (
+                        <div key={s.id} style={{
+                          fontSize: 9.5, lineHeight: 1.25, marginBottom: 2, padding: "2px 3px", borderRadius: 3,
+                          background: s.blocked ? C.orangeLight : C.ice,
+                          border: `1px solid ${s.blocked ? C.orange : C.iceLine}`,
+                          color: C.text, overflow: "hidden", whiteSpace: "nowrap", textOverflow: "ellipsis",
+                        }}>
+                          <div style={{ fontWeight: 600 }}>{rinkMap[s.rinkId]?.short || "Rink"}</div>
+                          <div style={{ color: C.textMuted }}>{fmtRange(toMin(s.start), toMin(s.end))}</div>
+                          {!s.blocked && (
+                            <div style={{ height: 2, background: C.borderLight, borderRadius: 1, marginTop: 2 }}>
+                              <div style={{ height: 2, width: `${Math.round(pct * 100)}%`, background: pct > 0.85 ? C.green : C.accent, borderRadius: 1 }} />
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                    {daySlots.length > 3 && <div style={{ fontSize: 9.5, color: C.textLight }}>+{daySlots.length - 3} more</div>}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      </SectionCard>
+
+      {editingSlot && (
+        <SlotEditorModal slot={editingSlot} rinks={rinks} onSave={saveSlot} onDelete={deleteSlot} onClose={() => setEditingSlot(null)} />
+      )}
+      {recurringOpen && (
+        <RecurringIceModal rinks={rinks} onClose={() => setRecurringOpen(false)}
+          onCreate={newSlots => { setSlots(prev => [...prev, ...newSlots]); setRecurringOpen(false); }} />
+      )}
+      {dayOpen && (
+        <DayDetailModal date={dayOpen} slots={slots} assignments={assignments} rinks={rinks} teams={teams}
+          onAdd={ds => { setDayOpen(null); setEditingSlot({ date: ds }); }}
+          onEdit={s => { setDayOpen(null); setEditingSlot(s); }}
+          onClose={() => setDayOpen(null)} />
+      )}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════
+// TAB 2 — ALLOCATE
+// Pick a week, say who needs how much ice, hit Allocate. This is the
+// equivalent of the lineup app's "Create a Lineup" tab: all the inputs in
+// one place, one big button at the bottom.
+// ══════════════════════════════════════════════════
+
+function WeekPicker({ weekStart, setWeekStart, compact }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+      <button onClick={() => setWeekStart(addDays(weekStart, -7))} style={smallBtn()}>‹</button>
+      <div style={{ fontFamily: DISPLAY, fontSize: compact ? 13 : 15, fontWeight: 700, minWidth: compact ? 120 : 150, textAlign: "center" }}>
+        {weekLabel(weekStart)}
+      </div>
+      <button onClick={() => setWeekStart(addDays(weekStart, 7))} style={smallBtn()}>›</button>
+    </div>
+  );
+}
+
+function AllocateTab({
+  weekStart, setWeekStart, teams, rinks, slots, assignments, rules,
+  requestOverrides, setRequestOverrides, onGenerate, lastResult, isFinalized,
+}) {
+  const isMobile = useIsMobile();
+  const [keepExisting, setKeepExisting] = useState(false);
+  const [openSections, setOpenSections] = useState(() => ({ supply: !isMobile, demand: true }));
+  const dates = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)), [weekStart]);
+
+  const weekSlots = useMemo(() => slots.filter(s => dates.includes(s.date)), [slots, dates]);
+  const weekAssignments = useMemo(() => assignments.filter(a => dates.includes(a.date)), [assignments, dates]);
+
+  const supply = useMemo(() => {
+    let total = 0, blocked = 0, booked = 0;
+    const byRink = {};
+    for (const s of weekSlots) {
+      const len = toMin(s.end) - toMin(s.start);
+      if (s.blocked) { blocked += len; continue; }
+      total += len;
+      const u = slotUtilization(s, weekAssignments);
+      booked += u.booked;
+      byRink[s.rinkId] = (byRink[s.rinkId] || 0) + len;
+    }
+    return { total, blocked, booked, open: total - booked, byRink };
+  }, [weekSlots, weekAssignments]);
+
+  const sessionsFor = t => {
+    const o = requestOverrides[t.id];
+    return o === undefined ? (t.sessionsPerWeek ?? 0) : o;
+  };
+
+  const demand = useMemo(() => {
+    let minutes = 0, sessions = 0;
+    for (const t of teams) {
+      const n = sessionsFor(t);
+      sessions += n;
+      minutes += n * ruleFor(rules, t.ageGroup).durationMin;
+    }
+    return { minutes, sessions };
+  }, [teams, requestOverrides, rules]);
+
+  const tight = demand.minutes > supply.total;
+  const setSessions = (teamId, n) => setRequestOverrides(prev => ({ ...prev, [teamId]: clamp(n, 0, 7) }));
+
+  const byBand = useMemo(() => {
+    const map = {};
+    for (const t of teams) (map[t.ageGroup] = map[t.ageGroup] || []).push(t);
+    return map;
+  }, [teams]);
+
+  const toggle = k => setOpenSections(s => ({ ...s, [k]: !s[k] }));
+  const Header = ({ id, title, right }) => (
+    <div onClick={() => toggle(id)} style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", padding: "12px 16px", borderBottom: openSections[id] ? `1px solid ${C.borderLight}` : "none" }}>
+      <span style={{ fontFamily: DISPLAY, fontSize: 16, fontWeight: 700 }}>{title}</span>
+      {right}
+      <span style={{ marginLeft: "auto", color: C.textMuted, fontSize: 12 }}>{openSections[id] ? "▾" : "▸"}</span>
+    </div>
+  );
+
+  return (
+    <div>
+      <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "12px 16px", marginBottom: 16, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <WeekPicker weekStart={weekStart} setWeekStart={setWeekStart} />
+        <button onClick={() => setWeekStart(weekStartOf(dateStr(new Date())))} style={{ ...smallBtn(), marginLeft: "auto" }}>This week</button>
+      </div>
+
+      {isFinalized && (
+        <div style={{ background: C.orangeLight, border: `1px solid ${C.orange}`, borderRadius: 8, padding: "12px 16px", marginBottom: 16, fontSize: 13, color: C.orangeText, lineHeight: 1.5 }}>
+          <strong>This week is published.</strong> Allocating again will replace what teams are already looking at. Unpublish it on the Schedule tab first if that isn't what you want.
+        </div>
+      )}
+
+      {/* ── Supply ─────────────────────────────────────────── */}
+      <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, marginBottom: 16 }}>
+        <Header id="supply" title="Ice available this week" right={
+          <span style={{ fontSize: 12, color: C.textMuted }}>{fmtDur(supply.total)} across {weekSlots.filter(s => !s.blocked).length} blocks</span>
+        } />
+        {openSections.supply && (
+          <div style={{ padding: 16 }}>
+            {!weekSlots.length && (
+              <div style={{ fontSize: 13, color: C.textMuted }}>
+                No ice purchased this week. Add blocks on the <strong>Ice</strong> tab first.
+              </div>
+            )}
+            {!!weekSlots.length && (
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 480 }}>
+                  <thead>
+                    <tr>
+                      <th style={{ ...thStyle, textAlign: "left" }}>Day</th>
+                      {rinks.map(r => <th key={r.id} style={{ ...thStyle }}>{r.short}</th>)}
+                      <th style={{ ...thStyle }}>Total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {dates.map(ds => {
+                      const day = weekSlots.filter(s => s.date === ds);
+                      const dayTotal = day.reduce((n, s) => n + (s.blocked ? 0 : toMin(s.end) - toMin(s.start)), 0);
+                      return (
+                        <tr key={ds}>
+                          <td style={{ ...tdStyle, textAlign: "left", fontWeight: 600, fontSize: 12 }}>{fmtDate(ds)}</td>
+                          {rinks.map(r => {
+                            const rs = day.filter(s => s.rinkId === r.id);
+                            return (
+                              <td key={r.id} style={{ ...tdStyle, textAlign: "center", fontSize: 11, color: rs.length ? C.text : C.textLight }}>
+                                {rs.length
+                                  ? rs.map(s => (
+                                      <div key={s.id} style={{ color: s.blocked ? C.orangeText : C.text }}>
+                                        {fmtRange(toMin(s.start), toMin(s.end))}
+                                      </div>
+                                    ))
+                                  : "—"}
+                              </td>
+                            );
+                          })}
+                          <td style={{ ...tdStyle, textAlign: "center", fontSize: 12, fontWeight: 600 }}>{dayTotal ? fmtDur(dayTotal) : "—"}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* ── Demand ─────────────────────────────────────────── */}
+      <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, marginBottom: 16 }}>
+        <Header id="demand" title="Who needs ice" right={
+          <span style={{ fontSize: 12, color: C.textMuted }}>{demand.sessions} ice times · {fmtDur(demand.minutes)}</span>
+        } />
+        {openSections.demand && (
+          <div style={{ padding: 16 }}>
+            <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 12, lineHeight: 1.5 }}>
+              Defaults come from each team's weekly target on the <strong>Teams</strong> tab. Change a number here to
+              override it for this week only — an extra skills session, a bye week, a team away at a tournament.
+            </div>
+            {AGE_GROUPS.filter(a => byBand[a.id]?.length).map(a => {
+              const r = ruleFor(rules, a.id);
+              return (
+                <div key={a.id} style={{ marginBottom: 14 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
+                    <AgeChip ageGroup={a.id} size={12} />
+                    <span style={{ fontSize: 11, color: C.textMuted }}>
+                      {fmtDur(r.durationMin)} ice · weeknights {fmtTime(toMin(r.weekday.earliest))}–{fmtTime(toMin(r.weekday.latest))} start · weekends {fmtTime(toMin(r.weekend.earliest))}–{fmtTime(toMin(r.weekend.latest))} start
+                      {r.allowShared ? " · shared ice OK" : ""}
+                    </span>
+                  </div>
+                  {byBand[a.id].map(t => {
+                    const n = sessionsFor(t);
+                    const overridden = requestOverrides[t.id] !== undefined && requestOverrides[t.id] !== t.sessionsPerWeek;
+                    return (
+                      <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 0", borderBottom: `1px solid ${C.borderLight}` }}>
+                        <span style={{ fontSize: 13, fontWeight: 500, flex: 1, color: n === 0 ? C.textLight : C.text }}>
+                          {t.name}
+                          <span style={{ fontSize: 11, color: C.textMuted, marginLeft: 6 }}>{t.level}</span>
+                        </span>
+                        {overridden && <span style={{ fontSize: 10, fontWeight: 600, color: C.blueText }}>OVERRIDE</span>}
+                        <button onClick={() => setSessions(t.id, n - 1)} style={{ ...smallBtn(), width: 30, padding: "5px 0" }}>−</button>
+                        <span style={{ minWidth: 22, textAlign: "center", fontSize: 14, fontWeight: 700, color: n === 0 ? C.textLight : C.text }}>{n}</span>
+                        <button onClick={() => setSessions(t.id, n + 1)} style={{ ...smallBtn(), width: 30, padding: "5px 0" }}>+</button>
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })}
+            {Object.keys(requestOverrides).length > 0 && (
+              <button onClick={() => setRequestOverrides({})} style={{ ...smallBtn(), marginTop: 4 }}>Reset to weekly targets</button>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* ── Balance + go ───────────────────────────────────── */}
+      <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: 16, marginBottom: 16 }}>
+        <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 14 }}>
+          {[
+            { label: "Ice available", value: fmtDur(supply.total), tone: C.text },
+            { label: "Ice requested", value: fmtDur(demand.minutes), tone: tight ? C.redText : C.text },
+            { label: "Slack", value: (supply.total - demand.minutes >= 0 ? "+" : "−") + fmtDur(Math.abs(supply.total - demand.minutes)), tone: tight ? C.redText : C.greenText },
+          ].map(s => (
+            <div key={s.label} style={{ flex: "1 1 120px" }}>
+              <div style={{ fontSize: 11, color: C.textMuted, fontWeight: 600 }}>{s.label}</div>
+              <div style={{ fontSize: 20, fontFamily: DISPLAY, fontWeight: 700, color: s.tone }}>{s.value}</div>
+            </div>
+          ))}
+        </div>
+        {tight && (
+          <div style={{ background: C.redLight, border: `1px solid ${C.red}`, borderRadius: 8, padding: "10px 12px", fontSize: 12, color: C.redText, marginBottom: 12, lineHeight: 1.5 }}>
+            More ice is requested than purchased this week. Some teams will come up short — the allocator spreads the
+            shortfall rather than starving one team, and lists everything it couldn't place.
+          </div>
+        )}
+        <label style={{ display: "flex", gap: 8, alignItems: "center", fontSize: 13, color: C.text, cursor: "pointer", marginBottom: 14 }}>
+          <input type="checkbox" checked={keepExisting} onChange={e => setKeepExisting(e.target.checked)} />
+          <span>Keep ice times already on the board this week and fill in around them</span>
+        </label>
+        <button
+          onClick={() => onGenerate({ keepExisting, requests: teams.flatMap(t => Array.from({ length: sessionsFor(t) }, () => ({ teamId: t.id, dates, kind: "practice" }))) })}
+          disabled={!weekSlots.length || demand.sessions === 0}
+          style={{
+            ...primaryBtn(), width: "100%", padding: "14px 0", fontSize: 15,
+            opacity: (!weekSlots.length || demand.sessions === 0) ? 0.5 : 1,
+            cursor: (!weekSlots.length || demand.sessions === 0) ? "not-allowed" : "pointer",
+          }}>
+          Allocate ice for {weekLabel(weekStart)}
+        </button>
+      </div>
+
+      {lastResult && lastResult.weekStart === weekStart && (
+        <SectionCard title="Last run" subtitle={`${lastResult.placed} ice times placed · best of ${lastResult.runs} attempts`}>
+          {lastResult.unplaced.length === 0 ? (
+            <div style={{ fontSize: 13, color: C.greenText }}>Every request was placed.</div>
+          ) : (
+            <div>
+              <div style={{ fontSize: 13, color: C.redText, marginBottom: 8, fontWeight: 600 }}>
+                {lastResult.unplaced.length} request{lastResult.unplaced.length === 1 ? "" : "s"} couldn't be placed:
+              </div>
+              {lastResult.unplaced.map((u, i) => (
+                <div key={i} style={{ fontSize: 12, color: C.text, padding: "4px 0", borderBottom: `1px solid ${C.borderLight}` }}>
+                  <strong>{u.teamName}</strong> — {u.reason}
+                </div>
+              ))}
+              <div style={{ fontSize: 11, color: C.textMuted, marginTop: 10, lineHeight: 1.5 }}>
+                Usually this means no purchased block overlaps that age group's start window on any day they're
+                available. Buying earlier ice, widening the window on the <strong>Teams</strong> tab, or turning on
+                shared ice for the younger bands are the three fixes.
+              </div>
+            </div>
+          )}
+        </SectionCard>
+      )}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════
+// EXPORTS
+// Three flavours, all generated in the browser with no server:
+//   • CSV for the invoicing/accounting side
+//   • .ics so a coach can subscribe once and stop asking
+//   • a self-contained printable HTML week for the arena office wall
+// ══════════════════════════════════════════════════
+function downloadBlob(filename, text, mime = "text/plain") {
+  const url = URL.createObjectURL(new Blob([text], { type: `${mime};charset=utf-8` }));
+  const a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function exportCSV(assignments, { teams, rinks, label }) {
+  const teamMap = Object.fromEntries(teams.map(t => [t.id, t]));
+  const rinkMap = Object.fromEntries(rinks.map(r => [r.id, r]));
+  const rows = [["Date", "Day", "Rink", "Start", "End", "Minutes", "Teams", "Age group", "Type", "Shared", "Ice quality"]];
+  const sorted = [...assignments].sort((a, b) => a.date.localeCompare(b.date) || toMin(a.start) - toMin(b.start));
+  for (const a of sorted) {
+    const ts = (a.teamIds || []).map(id => teamMap[id]?.name || id);
+    const band = teamMap[a.teamIds?.[0]]?.ageGroup;
+    rows.push([
+      a.date, DOW_LONG[dowOf(a.date)], rinkMap[a.rinkId]?.name || a.rinkId,
+      a.start, a.end, String(toMin(a.end) - toMin(a.start)),
+      ts.join(" + "), AGE_MAP[band]?.label || "", SESSION_KIND_MAP[a.kind]?.label || "Practice",
+      (a.teamIds || []).length > 1 ? "Yes" : "No",
+      QUALITY_LABEL[slotQuality(a.date, toMin(a.start))],
+    ]);
+  }
+  const csv = rows.map(r => r.map(c => /[",\n]/.test(c) ? `"${c.replace(/"/g, '""')}"` : c).join(",")).join("\n");
+  downloadBlob(`ice-schedule-${label}.csv`, csv, "text/csv");
+}
+
+function exportICS(assignments, { teams, rinks, label, teamFilter }) {
+  const teamMap = Object.fromEntries(teams.map(t => [t.id, t]));
+  const rinkMap = Object.fromEntries(rinks.map(r => [r.id, r]));
+  const pad = n => String(n).padStart(2, "0");
+  const stamp = d => `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}T${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}00Z`;
+  // Floating local times (no TZID) — every ice time is local to the rink,
+  // and floating means the calendar app shows exactly what's written.
+  const local = (ds, min) => `${ds.replace(/-/g, "")}T${toHHMM(min).replace(":", "")}00`;
+  const lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Ice Scheduler//EN", "CALSCALE:GREGORIAN", `X-WR-CALNAME:Ice schedule ${label}`];
+  const now = stamp(new Date());
+  const list = teamFilter ? assignments.filter(a => (a.teamIds || []).includes(teamFilter)) : assignments;
+  for (const a of list) {
+    const names = (a.teamIds || []).map(id => teamMap[id]?.name || id).join(" + ");
+    const rink = rinkMap[a.rinkId]?.name || "Rink";
+    lines.push(
+      "BEGIN:VEVENT",
+      `UID:${a.id}@icescheduler`,
+      `DTSTAMP:${now}`,
+      `DTSTART:${local(a.date, toMin(a.start))}`,
+      `DTEND:${local(a.date, toMin(a.end))}`,
+      `SUMMARY:${names} — ${SESSION_KIND_MAP[a.kind]?.label || "Practice"}`,
+      `LOCATION:${rink}`,
+      `DESCRIPTION:${fmtDur(toMin(a.end) - toMin(a.start))} at ${rink}${(a.teamIds || []).length > 1 ? " (shared ice)" : ""}`,
+      "END:VEVENT",
+    );
+  }
+  lines.push("END:VCALENDAR");
+  downloadBlob(`ice-${teamFilter ? teamMap[teamFilter]?.name.replace(/\s+/g, "-").toLowerCase() : "all"}-${label}.ics`, lines.join("\r\n"), "text/calendar");
+}
+
+function exportPrintable(assignments, { teams, rinks, dates, label }) {
+  const teamMap = Object.fromEntries(teams.map(t => [t.id, t]));
+  const rinkMap = Object.fromEntries(rinks.map(r => [r.id, r]));
+  const esc = s => String(s).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+  const body = dates.map(ds => {
+    const day = assignments.filter(a => a.date === ds).sort((x, y) => toMin(x.start) - toMin(y.start));
+    if (!day.length) return `<section><h2>${esc(fmtDateLong(ds))}</h2><p class="none">No ice scheduled.</p></section>`;
+    const rows = day.map(a => `<tr>
+      <td class="t">${esc(fmtRange(toMin(a.start), toMin(a.end)))}</td>
+      <td>${esc(rinkMap[a.rinkId]?.short || "")}</td>
+      <td class="team">${esc((a.teamIds || []).map(id => teamMap[id]?.name || id).join(" + "))}</td>
+      <td class="k">${esc(SESSION_KIND_MAP[a.kind]?.label || "Practice")}</td>
+    </tr>`).join("");
+    return `<section><h2>${esc(fmtDateLong(ds))}</h2><table>${rows}</table></section>`;
+  }).join("");
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Ice schedule ${esc(label)}</title>
+<style>
+  body{font-family:'Inter',-apple-system,'Segoe UI',sans-serif;color:#2c2c2c;margin:24px;max-width:760px}
+  h1{font-family:Georgia,serif;font-size:22px;margin-bottom:2px}
+  .sub{color:#777;font-size:12px;margin-bottom:20px}
+  section{margin-bottom:18px;break-inside:avoid}
+  h2{font-size:14px;border-bottom:2px solid #333;padding-bottom:3px;margin-bottom:6px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  td{padding:4px 6px;border-bottom:1px solid #eee}
+  td.t{white-space:nowrap;width:110px;color:#555}
+  td.team{font-weight:600}
+  td.k{text-align:right;color:#777;font-size:11px;width:70px}
+  .none{color:#999;font-size:12px}
+  @media print{body{margin:0}}
+</style></head><body>
+<h1>Ice schedule</h1><div class="sub">${esc(label)} · generated ${esc(new Date().toLocaleDateString())}</div>
+${body}
+</body></html>`;
+  downloadBlob(`ice-schedule-${label}.html`, html, "text/html");
+}
+
+// ══════════════════════════════════════════════════
+// TAB 3 — SCHEDULE BOARD
+// The allocated week, laid out day by day and rink by rink, with every
+// hand-edit the allocator can't be trusted to get right: swap two teams,
+// drop a team into open ice, nudge a start time, delete an ice time.
+// ══════════════════════════════════════════════════
+
+function ValidationPanel({ issues, open, setOpen, onRefresh }) {
+  const errors = issues.filter(i => i.severity === "error");
+  const warns  = issues.filter(i => i.severity === "warn");
+  const worst = errors[0] || warns[0] || issues[0];
+  const tone = errors.length ? { bg: C.redLight, border: C.red, text: C.redText, label: `${errors.length} conflict${errors.length === 1 ? "" : "s"}` }
+             : warns.length  ? { bg: C.orangeLight, border: C.orange, text: C.orangeText, label: `${warns.length} warning${warns.length === 1 ? "" : "s"}` }
+             : { bg: C.greenLight, border: C.green, text: C.greenText, label: "No conflicts" };
+  return (
+    <div style={{ background: tone.bg, border: `1px solid ${tone.border}`, borderRadius: 10, marginBottom: 16, overflow: "hidden" }}>
+      <div onClick={() => setOpen(!open)} style={{ padding: "10px 14px", display: "flex", alignItems: "center", gap: 10, cursor: "pointer", flexWrap: "wrap" }}>
+        <span style={{ fontSize: 11, fontWeight: 700, color: C.onAccent, background: tone.border, padding: "2px 8px", borderRadius: 4 }}>{tone.label}</span>
+        {!open && worst && <span style={{ fontSize: 12, color: tone.text, flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{worst.message}</span>}
+        <button onClick={e => { e.stopPropagation(); onRefresh(); }} style={{ ...smallBtn(), marginLeft: "auto" }}>Recheck</button>
+        <span style={{ color: tone.text, fontSize: 12 }}>{open ? "▾" : "▸"}</span>
+      </div>
+      {open && (
+        <div style={{ background: C.surface, borderTop: `1px solid ${tone.border}`, padding: "8px 14px", maxHeight: 260, overflowY: "auto" }}>
+          {!issues.length && <div style={{ fontSize: 12, color: C.textMuted, padding: "6px 0" }}>Nothing to report.</div>}
+          {issues.map((iss, i) => {
+            const c = iss.severity === "error" ? C.redText : iss.severity === "warn" ? C.orangeText : C.textMuted;
+            return (
+              <div key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start", padding: "5px 0", borderBottom: i < issues.length - 1 ? `1px solid ${C.borderLight}` : "none" }}>
+                <span style={{ fontSize: 10, fontWeight: 700, color: c, minWidth: 42, paddingTop: 1 }}>{iss.severity.toUpperCase()}</span>
+                <span style={{ fontSize: 12, color: C.text, lineHeight: 1.45 }}>{iss.message}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AssignModal({ slot, segment, teams, rules, assignments, rinks, onAssign, onClose }) {
+  const [teamId, setTeamId] = useState("");
+  const [start, setStart] = useState(null);
+
+  // For each team, work out whether it can legally take this gap and why not
+  // if it can't. This is the same rule set the allocator uses.
+  const options = useMemo(() => teams.map(t => {
+    const w = windowFor(rules, t.ageGroup, slot.date);
+    const lo = Math.max(segment.start, w.earliest);
+    const hi = Math.min(segment.end - w.duration, w.latest);
+    if ((t.blackoutDows || []).includes(dowOf(slot.date))) return { team: t, ok: false, why: `doesn't skate ${DOW_SHORT[dowOf(slot.date)]}` };
+    if ((t.blackoutDates || []).includes(slot.date)) return { team: t, ok: false, why: "blackout date" };
+    if (segment.end - segment.start < w.duration) return { team: t, ok: false, why: `needs ${fmtDur(w.duration)}, gap is ${fmtDur(segment.end - segment.start)}` };
+    if (hi < lo) return { team: t, ok: false, why: `start window is ${fmtTime(w.earliest)}–${fmtTime(w.latest)}` };
+    if (teamBusy(assignments, t.id, slot.date, lo, lo + w.duration)) return { team: t, ok: false, why: "already on the ice then" };
+    return { team: t, ok: true, lo, hi, duration: w.duration };
+  }), [teams, rules, slot, segment, assignments]);
+
+  const chosen = options.find(o => o.team.id === teamId);
+  const effStart = start ?? chosen?.lo ?? segment.start;
+  const starts = useMemo(() => {
+    if (!chosen?.ok) return [];
+    const out = [];
+    for (let t = Math.ceil(chosen.lo / STEP) * STEP; t <= chosen.hi; t += STEP) out.push(t);
+    if (!out.includes(chosen.lo)) out.unshift(chosen.lo);
+    return out;
+  }, [chosen]);
+
+  return (
+    <Modal title="Add a team to this ice" onClose={onClose} width={480}
+      footer={<>
+        <button onClick={onClose} style={btn()}>Cancel</button>
+        <button disabled={!chosen?.ok} onClick={() => onAssign({ teamId, start: effStart, end: effStart + chosen.duration })}
+          style={{ ...primaryBtn(), opacity: chosen?.ok ? 1 : 0.5, cursor: chosen?.ok ? "pointer" : "not-allowed" }}>Add ice time</button>
+      </>}>
+      <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 14 }}>
+        {rinks.find(r => r.id === slot.rinkId)?.name} · {fmtDateLong(slot.date)} · open {fmtRange(segment.start, segment.end)} ({fmtDur(segment.end - segment.start)})
+      </div>
+      <Field label="Team">
+        <div style={{ maxHeight: 260, overflowY: "auto", border: `1px solid ${C.border}`, borderRadius: 8 }}>
+          {options.map(o => (
+            <div key={o.team.id} onClick={() => o.ok && (setTeamId(o.team.id), setStart(null))} style={{
+              padding: "8px 12px", display: "flex", alignItems: "center", gap: 8,
+              cursor: o.ok ? "pointer" : "not-allowed",
+              background: teamId === o.team.id ? C.accentLight : "transparent",
+              borderBottom: `1px solid ${C.borderLight}`, opacity: o.ok ? 1 : 0.55,
+            }}>
+              <AgeChip ageGroup={o.team.ageGroup} />
+              <span style={{ fontSize: 13, fontWeight: 500 }}>{o.team.name}</span>
+              <span style={{ marginLeft: "auto", fontSize: 11, color: o.ok ? C.greenText : C.textMuted }}>
+                {o.ok ? `${fmtDur(o.duration)} · from ${fmtTime(o.lo)}` : o.why}
+              </span>
+            </div>
+          ))}
+        </div>
+      </Field>
+      {chosen?.ok && (
+        <Field label="Start time" hint={`Allowed between ${fmtTime(chosen.lo)} and ${fmtTime(chosen.hi)} for this age group on a ${dayTypeOf(slot.date)}.`}>
+          <select value={effStart} onChange={e => setStart(Number(e.target.value))} style={{ ...inputStyle, width: "100%" }}>
+            {starts.map(s => <option key={s} value={s}>{fmtRange(s, s + chosen.duration)}</option>)}
+          </select>
+        </Field>
+      )}
+    </Modal>
+  );
+}
+
+function IceTimeModal({ assignment, teams, rinks, slots, rules, assignments, onSave, onDelete, onClose }) {
+  const [draft, setDraft] = useState({ ...assignment });
+  const teamMap = Object.fromEntries(teams.map(t => [t.id, t]));
+  const slot = slots.find(s => s.id === draft.slotId);
+  const primary = teamMap[draft.teamIds?.[0]];
+  const set = (k, v) => setDraft(d => ({ ...d, [k]: v }));
+
+  // Legal starts for the primary team inside the block, ignoring this ice
+  // time's own footprint so it can slide over itself.
+  const others = assignments.filter(a => a.id !== assignment.id);
+  const starts = useMemo(() => {
+    if (!slot || !primary) return [];
+    const w = windowFor(rules, primary.ageGroup, slot.date);
+    const dur = toMin(draft.end) - toMin(draft.start);
+    const out = [];
+    for (let t = toMin(slot.start); t + dur <= toMin(slot.end); t += STEP) {
+      if (t < w.earliest || t > w.latest) continue;
+      const clash = others.some(a => a.slotId === slot.id && overlaps(toMin(a.start), toMin(a.end), t, t + dur));
+      if (clash) continue;
+      out.push(t);
+    }
+    if (!out.includes(toMin(draft.start))) out.unshift(toMin(draft.start));
+    return out.sort((a, b) => a - b);
+  }, [slot, primary, draft.start, draft.end, rules, others]);
+
+  const dur = toMin(draft.end) - toMin(draft.start);
+  return (
+    <Modal title="Ice time" onClose={onClose} width={460}
+      footer={<>
+        <button onClick={() => onDelete(assignment.id)} style={{ ...dangerBtn(), marginRight: "auto" }}>Remove</button>
+        <button onClick={onClose} style={btn()}>Cancel</button>
+        <button onClick={() => onSave(draft)} style={primaryBtn()}>Save</button>
+      </>}>
+      <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 14 }}>
+        {rinks.find(r => r.id === draft.rinkId)?.name} · {fmtDateLong(draft.date)}
+      </div>
+      <Field label="Team">
+        <select value={draft.teamIds?.[0] || ""} onChange={e => set("teamIds", [e.target.value, ...(draft.teamIds || []).slice(1)])} style={{ ...inputStyle, width: "100%" }}>
+          {teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+        </select>
+      </Field>
+      {(draft.teamIds || []).length > 1 && (
+        <Field label="Sharing with">
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <select value={draft.teamIds[1]} onChange={e => set("teamIds", [draft.teamIds[0], e.target.value])} style={{ ...inputStyle, flex: 1 }}>
+              {teams.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+            </select>
+            <button onClick={() => { set("teamIds", [draft.teamIds[0]]); set("shared", false); }} style={smallBtn()}>Unshare</button>
+          </div>
+        </Field>
+      )}
+      <Field label="Start" hint={primary ? `${AGE_MAP[primary.ageGroup]?.label} may start between ${fmtTime(windowFor(rules, primary.ageGroup, draft.date).earliest)} and ${fmtTime(windowFor(rules, primary.ageGroup, draft.date).latest)} on a ${dayTypeOf(draft.date)}.` : null}>
+        <select value={toMin(draft.start)} onChange={e => { const s = Number(e.target.value); setDraft(d => ({ ...d, start: toHHMM(s), end: toHHMM(s + dur) })); }} style={{ ...inputStyle, width: "100%" }}>
+          {starts.map(s => <option key={s} value={s}>{fmtRange(s, s + dur)}</option>)}
+        </select>
+      </Field>
+      <Field label="Length">
+        <select value={dur} onChange={e => setDraft(d => ({ ...d, end: toHHMM(toMin(d.start) + Number(e.target.value)) }))} style={{ ...inputStyle, width: "100%" }}>
+          {[30, 45, 50, 60, 75, 80, 90, 105, 120].map(n => <option key={n} value={n}>{fmtDur(n)}</option>)}
+        </select>
+      </Field>
+      <Field label="Type">
+        <div style={{ display: "flex", gap: 6 }}>
+          {SESSION_KINDS.map(k => (
+            <button key={k.id} onClick={() => set("kind", k.id)} style={{
+              ...chipStyle, flex: 1,
+              background: draft.kind === k.id ? C.accent : C.surface,
+              color: draft.kind === k.id ? C.onAccent : C.text,
+              borderColor: draft.kind === k.id ? C.accent : C.border,
+            }}>{k.label}</button>
+          ))}
+        </div>
+      </Field>
+    </Modal>
+  );
+}
+
+function ScheduleTab({
+  weekStart, setWeekStart, assignments, setAssignments, teams, rinks, slots, rules,
+  isFinalized, onTogglePublish,
+}) {
+  const isMobile = useIsMobile();
+  const [view, setView] = useState("board");
+  const [swapMode, setSwapMode] = useState(false);
+  const [swapPick, setSwapPick] = useState(null);
+  const [openAssign, setOpenAssign] = useState(null);     // { slot, segment }
+  const [openIceTime, setOpenIceTime] = useState(null);
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [history, setHistory] = useState([]);
+  const [future, setFuture] = useState([]);
+  const [baseline, setBaseline] = useState(null);
+  const [nonce, setNonce] = useState(0);
+
+  const dates = useMemo(() => Array.from({ length: 7 }, (_, i) => addDays(weekStart, i)), [weekStart]);
+  const teamMap = useMemo(() => Object.fromEntries(teams.map(t => [t.id, t])), [teams]);
+  const rinkMap = useMemo(() => Object.fromEntries(rinks.map(r => [r.id, r])), [rinks]);
+  const weekAssignments = useMemo(() => assignments.filter(a => dates.includes(a.date)), [assignments, dates]);
+  const weekSlots = useMemo(() => slots.filter(s => dates.includes(s.date)), [slots, dates]);
+
+  // Snapshot the week the first time it's viewed so Reset has something to
+  // go back to.
+  useEffect(() => { setBaseline(weekAssignments.map(a => ({ ...a }))); setHistory([]); setFuture([]); }, [weekStart]);
+
+  const issues = useMemo(
+    () => validateSchedule({ assignments, teams, slots, rinks, rules, dates }),
+    [assignments, teams, slots, rinks, rules, dates, nonce]
+  );
+
+  const commit = next => {
+    setHistory(h => [...h, assignments.map(a => ({ ...a }))]);
+    setFuture([]);
+    setAssignments(next);
+  };
+  const undo = () => {
+    if (!history.length) return;
+    const prev = history[history.length - 1];
+    setHistory(h => h.slice(0, -1));
+    setFuture(f => [...f, assignments.map(a => ({ ...a }))]);
+    setAssignments(prev);
+  };
+  const redo = () => {
+    if (!future.length) return;
+    const nxt = future[future.length - 1];
+    setFuture(f => f.slice(0, -1));
+    setHistory(h => [...h, assignments.map(a => ({ ...a }))]);
+    setAssignments(nxt);
+  };
+  const resetWeek = () => {
+    if (!baseline) return;
+    commit([...assignments.filter(a => !dates.includes(a.date)), ...baseline.map(a => ({ ...a }))]);
+  };
+
+  const handleCardClick = a => {
+    if (isFinalized) return;
+    if (!swapMode) { setOpenIceTime(a); return; }
+    if (!swapPick) { setSwapPick(a.id); return; }
+    if (swapPick === a.id) { setSwapPick(null); return; }
+    const other = assignments.find(x => x.id === swapPick);
+    if (!other) { setSwapPick(null); return; }
+    // Swap the teams, not the ice times — the ice stays where it is, the
+    // teams trade places. Length differences are left for validation to
+    // flag rather than silently resizing anyone's ice.
+    commit(assignments.map(x =>
+      x.id === a.id ? { ...x, teamIds: other.teamIds, kind: other.kind } :
+      x.id === other.id ? { ...x, teamIds: a.teamIds, kind: a.kind } : x
+    ));
+    setSwapPick(null);
+  };
+
+  const label = weekLabel(weekStart).replace(/[^\w-]+/g, "-").toLowerCase();
+
+  const stats = useMemo(() => {
+    let purchased = 0, booked = 0;
+    for (const s of weekSlots) {
+      if (s.blocked) continue;
+      purchased += toMin(s.end) - toMin(s.start);
+      booked += slotUtilization(s, weekAssignments).booked;
+    }
+    return { purchased, booked, pct: purchased ? Math.round(booked / purchased * 100) : 0, count: weekAssignments.length };
+  }, [weekSlots, weekAssignments]);
+
+  return (
+    <div>
+      <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, padding: "12px 16px", marginBottom: 16, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+        <WeekPicker weekStart={weekStart} setWeekStart={setWeekStart} compact={isMobile} />
+        <div style={{ fontSize: 12, color: C.textMuted, display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <span><strong style={{ color: C.text }}>{stats.count}</strong> ice times</span>
+          <span><strong style={{ color: C.text }}>{stats.pct}%</strong> of {fmtDur(stats.purchased)} used</span>
+        </div>
+        <div style={{ marginLeft: "auto", display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {["board", "teams"].map(v => (
+            <button key={v} onClick={() => setView(v)} style={{
+              ...smallBtn(),
+              background: view === v ? C.accent : C.surface,
+              color: view === v ? C.onAccent : C.text,
+              borderColor: view === v ? C.accent : C.border,
+              fontWeight: view === v ? 600 : 500,
+            }}>{v === "board" ? "Board" : "By team"}</button>
+          ))}
+        </div>
+      </div>
+
+      {isFinalized && (
+        <div style={{ background: C.blueLight, border: `1px solid ${C.blue}`, borderRadius: 8, padding: "10px 14px", marginBottom: 16, fontSize: 12, color: C.blueText, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <strong>Published.</strong> <span>Teams are looking at this week. Unpublish to make changes.</span>
+        </div>
+      )}
+
+      <ValidationPanel issues={issues} open={panelOpen} setOpen={setPanelOpen} onRefresh={() => setNonce(n => n + 1)} />
+
+      {view === "board" ? (
+        <BoardView
+          dates={dates} slots={weekSlots} assignments={weekAssignments}
+          rinkMap={rinkMap} teamMap={teamMap} rinks={rinks}
+          swapMode={swapMode} swapPick={swapPick} isFinalized={isFinalized}
+          onCardClick={handleCardClick}
+          onGapClick={(slot, segment) => !isFinalized && setOpenAssign({ slot, segment })}
+        />
+      ) : (
+        <TeamWeekView dates={dates} assignments={weekAssignments} teams={teams} rinks={rinks} rinkMap={rinkMap} label={label} />
+      )}
+
+      <SectionCard title="Edit" pad={14}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button onClick={() => { setSwapMode(m => !m); setSwapPick(null); }} disabled={isFinalized} style={{
+            ...btn(), opacity: isFinalized ? 0.5 : 1,
+            background: swapMode ? C.accent : C.surface, color: swapMode ? C.onAccent : C.text,
+            borderColor: swapMode ? C.accent : C.border, fontWeight: swapMode ? 600 : 500,
+          }}>{swapMode ? "Swap mode: on" : "Swap teams"}</button>
+          <button onClick={undo} disabled={!history.length || isFinalized} style={{ ...btn(), opacity: (!history.length || isFinalized) ? 0.5 : 1 }}>Undo</button>
+          <button onClick={redo} disabled={!future.length || isFinalized} style={{ ...btn(), opacity: (!future.length || isFinalized) ? 0.5 : 1 }}>Redo</button>
+          <button onClick={resetWeek} disabled={isFinalized} style={{ ...btn(), opacity: isFinalized ? 0.5 : 1 }}>Reset week</button>
+          <button onClick={onTogglePublish} style={{ ...(isFinalized ? btn() : primaryBtn()), marginLeft: "auto" }}>
+            {isFinalized ? "Unpublish week" : "Publish week"}
+          </button>
+        </div>
+        {swapMode && (
+          <div style={{ marginTop: 10, fontSize: 12, color: C.textMuted }}>
+            {swapPick ? "Now tap the ice time to swap it with." : "Tap two ice times to trade the teams between them."}
+          </div>
+        )}
+      </SectionCard>
+
+      <SectionCard title="Share this week" subtitle="Everything generates in the browser — nothing is uploaded." pad={14}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button onClick={() => exportPrintable(weekAssignments, { teams, rinks, dates, label })} style={btn()}>Printable sheet</button>
+          <button onClick={() => exportCSV(weekAssignments, { teams, rinks, label })} style={btn()}>CSV</button>
+          <button onClick={() => exportICS(weekAssignments, { teams, rinks, label })} style={btn()}>Calendar (.ics)</button>
+        </div>
+      </SectionCard>
+
+      {openAssign && (
+        <AssignModal
+          slot={openAssign.slot} segment={openAssign.segment} teams={teams} rules={rules}
+          assignments={assignments} rinks={rinks}
+          onClose={() => setOpenAssign(null)}
+          onAssign={({ teamId, start, end }) => {
+            commit([...assignments, {
+              id: uid("ice"), slotId: openAssign.slot.id, rinkId: openAssign.slot.rinkId,
+              date: openAssign.slot.date, start: toHHMM(start), end: toHHMM(end),
+              teamIds: [teamId], kind: "practice", locked: false, shared: false,
+            }]);
+            setOpenAssign(null);
+          }} />
+      )}
+      {openIceTime && (
+        <IceTimeModal
+          assignment={openIceTime} teams={teams} rinks={rinks} slots={slots} rules={rules} assignments={assignments}
+          onClose={() => setOpenIceTime(null)}
+          onSave={next => { commit(assignments.map(a => a.id === next.id ? { ...next, shared: (next.teamIds || []).length > 1 } : a)); setOpenIceTime(null); }}
+          onDelete={id => { commit(assignments.filter(a => a.id !== id)); setOpenIceTime(null); }} />
+      )}
+    </div>
+  );
+}
+
+// One rink's worth of a single day: the purchased block(s) with the ice
+// times inside them and whatever gaps are left over.
+function RinkColumn({ rink, slots, assignments, teamMap, swapMode, swapPick, isFinalized, onCardClick, onGapClick }) {
+  return (
+    <div style={{ flex: "1 1 190px", minWidth: 180 }}>
+      <div style={{ fontSize: 11, fontWeight: 700, color: C.textMuted, padding: "0 0 6px", borderBottom: `1px solid ${C.borderLight}`, marginBottom: 6 }}>
+        {rink?.short || "Rink"}
+      </div>
+      {slots.map(slot => {
+        if (slot.blocked) {
+          return (
+            <div key={slot.id} style={{ background: C.orangeLight, border: `1px dashed ${C.orange}`, borderRadius: 6, padding: "8px 10px", marginBottom: 6 }}>
+              <div style={{ fontSize: 11, color: C.orangeText, fontWeight: 600 }}>{fmtRange(toMin(slot.start), toMin(slot.end))}</div>
+              <div style={{ fontSize: 11, color: C.orangeText }}>Blocked{slot.blockLabel ? ` — ${slot.blockLabel}` : ""}</div>
+            </div>
+          );
+        }
+        // Interleave booked ice times and free gaps in clock order.
+        const booked = assignmentsInSlot(assignments, slot.id);
+        const gaps = freeSegments(slot, assignments);
+        const items = [
+          ...booked.map(a => ({ kind: "ice", start: toMin(a.start), a })),
+          ...gaps.map(g => ({ kind: "gap", start: g.start, g })),
+        ].sort((x, y) => x.start - y.start);
+
+        return (
+          <div key={slot.id} style={{ marginBottom: 8 }}>
+            <div style={{ fontSize: 10, color: C.textLight, marginBottom: 3 }}>
+              block {fmtRange(toMin(slot.start), toMin(slot.end))}
+            </div>
+            {items.map((item, i) => {
+              if (item.kind === "gap") {
+                const len = item.g.end - item.g.start;
+                const usable = len >= MIN_USEFUL_BLOCK;
+                return (
+                  <div key={`g${i}`} onClick={() => usable && onGapClick(slot, item.g)} style={{
+                    border: `1px dashed ${usable ? C.iceLine : C.borderLight}`,
+                    background: usable ? "transparent" : C.surfaceAlt,
+                    borderRadius: 6, padding: "6px 8px", marginBottom: 4,
+                    cursor: usable && !isFinalized ? "pointer" : "default",
+                    opacity: usable ? 1 : 0.7,
+                  }}>
+                    <div style={{ fontSize: 11, color: C.textMuted, fontWeight: 600 }}>{fmtRange(item.g.start, item.g.end)}</div>
+                    <div style={{ fontSize: 10, color: C.textLight }}>
+                      {usable ? `Open — ${fmtDur(len)}` : `${fmtDur(len)} stranded`}
+                    </div>
+                  </div>
+                );
+              }
+              const a = item.a;
+              const primary = teamMap[a.teamIds?.[0]];
+              const band = primary?.ageGroup;
+              const q = slotQuality(a.date, toMin(a.start));
+              const selected = swapPick === a.id;
+              const edge = selected ? C.accent : C.borderLight;
+              return (
+                <div key={a.id} className={selected ? "swap-selected" : ""} onClick={() => onCardClick(a)} style={{
+                  background: BAND_BG[band] || C.surfaceAlt,
+                  borderWidth: "1px 1px 1px 3px", borderStyle: "solid",
+                  borderColor: [edge, edge, edge, SESSION_KIND_MAP[a.kind]?.color?.() || C.blue].join(" "),
+                  borderRadius: 6, padding: "6px 8px", marginBottom: 4,
+                  cursor: isFinalized ? "default" : "pointer",
+                }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: C.text }}>{fmtRange(toMin(a.start), toMin(a.end))}</span>
+                    <QualityDot quality={q} />
+                    {(a.teamIds || []).length > 1 && <span style={{ fontSize: 9, fontWeight: 700, color: C.blueText }}>SHARED</span>}
+                  </div>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: C.text, lineHeight: 1.3 }}>
+                    {(a.teamIds || []).map(id => teamMap[id]?.name || "?").join(" + ")}
+                  </div>
+                  {a.kind && a.kind !== "practice" && (
+                    <div style={{ fontSize: 10, color: C.textMuted }}>{SESSION_KIND_MAP[a.kind]?.label}</div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function BoardView({ dates, slots, assignments, rinkMap, teamMap, rinks, swapMode, swapPick, isFinalized, onCardClick, onGapClick }) {
+  const anyIce = slots.length > 0;
+  if (!anyIce) {
+    return (
+      <SectionCard title="Nothing to show">
+        <div style={{ fontSize: 13, color: C.textMuted, lineHeight: 1.6 }}>
+          No ice is purchased for this week. Add blocks on the <strong>Ice</strong> tab, then allocate teams into them
+          on the <strong>Allocate</strong> tab.
+        </div>
+      </SectionCard>
+    );
+  }
+  return (
+    <div>
+      {dates.map(ds => {
+        const daySlots = slots.filter(s => s.date === ds);
+        const dayAssignments = assignments.filter(a => a.date === ds);
+        const rinkIds = rinks.map(r => r.id).filter(id => daySlots.some(s => s.rinkId === id));
+        return (
+          <div key={ds} style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 10, marginBottom: 12, overflow: "hidden" }}>
+            <div style={{ padding: "9px 14px", background: isWeekend(ds) ? C.accentLight : C.surfaceAlt, borderBottom: `1px solid ${C.borderLight}`, display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontFamily: DISPLAY, fontSize: 14, fontWeight: 700 }}>{fmtDateLong(ds)}</span>
+              <span style={{ fontSize: 11, color: C.textMuted, marginLeft: "auto" }}>
+                {dayAssignments.length ? `${dayAssignments.length} ice time${dayAssignments.length === 1 ? "" : "s"}` : "no ice scheduled"}
+              </span>
+            </div>
+            {!rinkIds.length ? (
+              <div style={{ padding: "12px 14px", fontSize: 12, color: C.textLight }}>No ice purchased.</div>
+            ) : (
+              <div style={{ display: "flex", gap: 14, padding: 14, flexWrap: "wrap", alignItems: "flex-start" }}>
+                {rinkIds.map(rid => (
+                  <RinkColumn key={rid}
+                    rink={rinkMap[rid]}
+                    slots={daySlots.filter(s => s.rinkId === rid).sort((a, b) => toMin(a.start) - toMin(b.start))}
+                    assignments={dayAssignments}
+                    teamMap={teamMap}
+                    swapMode={swapMode} swapPick={swapPick} isFinalized={isFinalized}
+                    onCardClick={onCardClick} onGapClick={onGapClick} />
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// The same week from the coaches' side: one row per team, one column per
+// day. This is the view that gets screenshotted into a team chat.
+function TeamWeekView({ dates, assignments, teams, rinks, rinkMap, label }) {
+  const byBand = useMemo(() => {
+    const map = {};
+    for (const t of teams) (map[t.ageGroup] = map[t.ageGroup] || []).push(t);
+    return map;
+  }, [teams]);
+  return (
+    <SectionCard title="By team" subtitle="Every team's week at a glance. The ⤓ button downloads that team's calendar file." pad={0}>
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 720 }}>
+          <thead>
+            <tr>
+              <th style={{ ...thStyle, textAlign: "left", position: "sticky", left: 0, background: C.surfaceAlt, zIndex: 1 }}>Team</th>
+              {dates.map(ds => <th key={ds} style={{ ...thStyle }}>{fmtDate(ds)}</th>)}
+              <th style={{ ...thStyle }}>Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            {AGE_GROUPS.filter(a => byBand[a.id]?.length).map(a => (
+              <React.Fragment key={a.id}>
+                <tr>
+                  <td colSpan={dates.length + 2} style={{ padding: "6px 10px", background: BAND_BG[a.id], fontSize: 11, fontWeight: 700, color: C.text, borderBottom: `1px solid ${C.borderLight}` }}>
+                    {a.full}
+                  </td>
+                </tr>
+                {byBand[a.id].map(t => {
+                  const mine = assignments.filter(x => (x.teamIds || []).includes(t.id));
+                  const total = mine.reduce((n, x) => n + toMin(x.end) - toMin(x.start), 0);
+                  return (
+                    <tr key={t.id}>
+                      <td style={{ ...tdStyle, textAlign: "left", fontWeight: 600, fontSize: 12, position: "sticky", left: 0, background: C.surface }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <span>{t.name}</span>
+                          {!!mine.length && (
+                            <button title={`Download ${t.name}'s week as a calendar file`}
+                              onClick={() => exportICS(assignments, { teams, rinks, label, teamFilter: t.id })}
+                              style={{ ...smallBtn(), padding: "1px 6px", fontSize: 11, lineHeight: 1.4 }}>⤓</button>
+                          )}
+                        </div>
+                      </td>
+                      {dates.map(ds => {
+                        const day = mine.filter(x => x.date === ds).sort((p, q) => toMin(p.start) - toMin(q.start));
+                        return (
+                          <td key={ds} style={{ ...tdStyle, textAlign: "center", fontSize: 11 }}>
+                            {day.length ? day.map(x => (
+                              <div key={x.id} style={{ marginBottom: 2 }}>
+                                <div style={{ fontWeight: 600 }}>{fmtRange(toMin(x.start), toMin(x.end))}</div>
+                                <div style={{ color: C.textMuted, fontSize: 10 }}>{rinkMap[x.rinkId]?.short}</div>
+                              </div>
+                            )) : <span style={{ color: C.textLight }}>—</span>}
+                          </td>
+                        );
+                      })}
+                      <td style={{ ...tdStyle, textAlign: "center", fontSize: 12, fontWeight: 600, color: total ? C.text : C.textLight }}>
+                        {total ? fmtDur(total) : "—"}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </React.Fragment>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </SectionCard>
+  );
+}
+
+// ══════════════════════════════════════════════════
+// TAB 4 — TEAMS, RINKS & RULES
+// The setup tab, plus the reports that answer the only two questions a
+// board ever asks: "did everyone get their hours?" and "who's got all the
+// prime ice?"
+// ══════════════════════════════════════════════════
+
+function TeamEditorModal({ team, rinks, onSave, onDelete, onClose }) {
+  const [draft, setDraft] = useState(() => ({
+    name: "", ageGroup: "u11", level: "A", sessionsPerWeek: 3,
+    homeRinkId: "", blackoutDows: [], blackoutDates: [], notes: "", ...team,
+  }));
+  const [err, setErr] = useState("");
+  const [blackoutDraft, setBlackoutDraft] = useState("");
+  const set = (k, v) => setDraft(d => ({ ...d, [k]: v }));
+  const toggleDow = d => setDraft(x => ({ ...x, blackoutDows: (x.blackoutDows || []).includes(d) ? x.blackoutDows.filter(v => v !== d) : [...(x.blackoutDows || []), d].sort() }));
+  const submit = () => {
+    if (!draft.name.trim()) return setErr("Give the team a name.");
+    onSave({ ...draft, name: draft.name.trim(), id: draft.id || uid("t") });
+  };
+  return (
+    <Modal title={team?.id ? "Edit team" : "Add team"} onClose={onClose} width={480}
+      footer={<>
+        {team?.id && <button onClick={() => onDelete(team.id)} style={{ ...dangerBtn(), marginRight: "auto" }}>Delete</button>}
+        <button onClick={onClose} style={btn()}>Cancel</button>
+        <button onClick={submit} style={primaryBtn()}>Save team</button>
+      </>}>
+      <Field label="Team name">
+        <input value={draft.name} onChange={e => set("name", e.target.value)} placeholder="e.g. U13 A" style={{ ...inputStyle, width: "100%" }} />
+      </Field>
+      <div style={{ display: "flex", gap: 10 }}>
+        <Field label="Age group" style={{ flex: 1 }}>
+          <select value={draft.ageGroup} onChange={e => set("ageGroup", e.target.value)} style={{ ...inputStyle, width: "100%" }}>
+            {AGE_GROUPS.map(a => <option key={a.id} value={a.id}>{a.full}</option>)}
+          </select>
+        </Field>
+        <Field label="Level" style={{ flex: 1 }}>
+          <input value={draft.level} onChange={e => set("level", e.target.value)} placeholder="A / B / House" style={{ ...inputStyle, width: "100%" }} />
+        </Field>
+      </div>
+      <div style={{ display: "flex", gap: 10 }}>
+        <Field label="Ice times per week" style={{ flex: 1 }}>
+          <input type="number" min={0} max={7} value={draft.sessionsPerWeek}
+            onChange={e => set("sessionsPerWeek", clamp(Number(e.target.value) || 0, 0, 7))}
+            style={{ ...inputStyle, width: "100%" }} />
+        </Field>
+        <Field label="Home rink" style={{ flex: 1 }} hint="Preferred, not required.">
+          <select value={draft.homeRinkId || ""} onChange={e => set("homeRinkId", e.target.value)} style={{ ...inputStyle, width: "100%" }}>
+            <option value="">No preference</option>
+            {rinks.map(r => <option key={r.id} value={r.id}>{r.short}</option>)}
+          </select>
+        </Field>
+      </div>
+      <Field label="Days this team never skates">
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {DOW_SHORT.map((d, i) => {
+            const on = (draft.blackoutDows || []).includes(i);
+            return (
+              <button key={i} onClick={() => toggleDow(i)} style={{
+                ...miniChipStyle, padding: "6px 10px", fontSize: 12,
+                background: on ? C.red : C.surface, color: on ? C.onAccent : C.text,
+                borderColor: on ? C.red : C.border, fontWeight: on ? 600 : 500,
+              }}>{d}</button>
+            );
+          })}
+        </div>
+      </Field>
+      <Field label="Blackout dates" hint="Tournaments, exam week, anything that takes the team off the ice entirely.">
+        <div style={{ display: "flex", gap: 8 }}>
+          <input type="date" value={blackoutDraft} onChange={e => setBlackoutDraft(e.target.value)} style={{ ...inputStyle, flex: 1 }} />
+          <button onClick={() => {
+            if (!blackoutDraft) return;
+            set("blackoutDates", Array.from(new Set([...(draft.blackoutDates || []), blackoutDraft])).sort());
+            setBlackoutDraft("");
+          }} style={btn()}>Add</button>
+        </div>
+        {!!(draft.blackoutDates || []).length && (
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 8 }}>
+            {draft.blackoutDates.map(d => (
+              <span key={d} style={{ ...miniChipStyle, display: "inline-flex", gap: 6, alignItems: "center" }}>
+                {fmtDate(d)}
+                <button onClick={() => set("blackoutDates", draft.blackoutDates.filter(x => x !== d))}
+                  style={{ background: "transparent", border: "none", color: C.textMuted, cursor: "pointer", fontSize: 13, lineHeight: 1, padding: 0 }}>×</button>
+              </span>
+            ))}
+          </div>
+        )}
+      </Field>
+      <Field label="Notes">
+        <input value={draft.notes || ""} onChange={e => set("notes", e.target.value)} placeholder="Optional" style={{ ...inputStyle, width: "100%" }} />
+      </Field>
+      {err && <div style={{ fontSize: 12, color: C.redText }}>{err}</div>}
+    </Modal>
+  );
+}
+
+function RinkEditorModal({ rink, onSave, onDelete, onClose }) {
+  const [draft, setDraft] = useState(() => ({ name: "", short: "", ...rink }));
+  const [err, setErr] = useState("");
+  const submit = () => {
+    if (!draft.name.trim()) return setErr("Give the rink a name.");
+    onSave({ ...draft, name: draft.name.trim(), short: (draft.short || draft.name).trim(), id: draft.id || uid("rink") });
+  };
+  return (
+    <Modal title={rink?.id ? "Edit rink" : "Add rink"} onClose={onClose} width={420}
+      footer={<>
+        {rink?.id && <button onClick={() => onDelete(rink.id)} style={{ ...dangerBtn(), marginRight: "auto" }}>Delete</button>}
+        <button onClick={onClose} style={btn()}>Cancel</button>
+        <button onClick={submit} style={primaryBtn()}>Save rink</button>
+      </>}>
+      <Field label="Full name">
+        <input value={draft.name} onChange={e => setDraft(d => ({ ...d, name: e.target.value }))} placeholder="e.g. Civic Arena — Rink 1" style={{ ...inputStyle, width: "100%" }} />
+      </Field>
+      <Field label="Short name" hint="Used in the calendar and on the board, where space is tight.">
+        <input value={draft.short || ""} onChange={e => setDraft(d => ({ ...d, short: e.target.value }))} placeholder="e.g. Civic 1" style={{ ...inputStyle, width: "100%" }} />
+      </Field>
+      {err && <div style={{ fontSize: 12, color: C.redText }}>{err}</div>}
+    </Modal>
+  );
+}
+
+// The heart of the constraint set: one row per age band, with the ice
+// length and the earliest/latest start times that the allocator treats as
+// hard limits.
+function RulesEditor({ rules, setRules }) {
+  const [showHelp, setShowHelp] = useState(false);
+  const update = (band, path, value) => {
+    setRules(prev => {
+      const next = { ...prev, [band]: { ...ruleFor(prev, band) } };
+      if (path.length === 1) next[band][path[0]] = value;
+      else next[band][path[0]] = { ...next[band][path[0]], [path[1]]: value };
+      return next;
+    });
+  };
+  const cell = { ...tdStyle, textAlign: "center", padding: "6px 6px" };
+  const timeInput = { ...inputStyle, padding: "4px 6px", fontSize: 12, width: 112 };
+  return (
+    <SectionCard
+      title="Age group rules"
+      subtitle="Hard limits the allocator will not break."
+      right={<button onClick={() => setShowHelp(true)} style={{ ...smallBtn(), width: 28, padding: "5px 0" }}>?</button>}
+      pad={0}
+    >
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 800 }}>
+          <thead>
+            <tr>
+              <th style={{ ...thStyle, textAlign: "left" }}>Age group</th>
+              <th style={{ ...thStyle }}>Ice length</th>
+              <th style={{ ...thStyle }}>Weeknight start</th>
+              <th style={{ ...thStyle }}>Weekend start</th>
+              <th style={{ ...thStyle }}>Max/day</th>
+              <th style={{ ...thStyle }}>Shared ice</th>
+            </tr>
+          </thead>
+          <tbody>
+            {AGE_GROUPS.map(a => {
+              const r = ruleFor(rules, a.id);
+              return (
+                <tr key={a.id}>
+                  <td style={{ ...tdStyle, textAlign: "left" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <AgeChip ageGroup={a.id} size={12} />
+                      <span style={{ fontSize: 12, color: C.textMuted }}>{a.full.replace(/^\S+\s/, "")}</span>
+                    </div>
+                  </td>
+                  <td style={cell}>
+                    <select value={r.durationMin} onChange={e => update(a.id, ["durationMin"], Number(e.target.value))} style={{ ...inputStyle, padding: "4px 6px", fontSize: 12 }}>
+                      {[30, 45, 50, 60, 75, 80, 90, 105, 120].map(n => <option key={n} value={n}>{fmtDur(n)}</option>)}
+                    </select>
+                  </td>
+                  <td style={cell}>
+                    <div style={{ display: "flex", gap: 4, alignItems: "center", justifyContent: "center" }}>
+                      <input type="time" step={900} value={r.weekday.earliest} onChange={e => update(a.id, ["weekday", "earliest"], e.target.value)} style={timeInput} />
+                      <span style={{ color: C.textLight, fontSize: 11 }}>to</span>
+                      <input type="time" step={900} value={r.weekday.latest} onChange={e => update(a.id, ["weekday", "latest"], e.target.value)} style={timeInput} />
+                    </div>
+                  </td>
+                  <td style={cell}>
+                    <div style={{ display: "flex", gap: 4, alignItems: "center", justifyContent: "center" }}>
+                      <input type="time" step={900} value={r.weekend.earliest} onChange={e => update(a.id, ["weekend", "earliest"], e.target.value)} style={timeInput} />
+                      <span style={{ color: C.textLight, fontSize: 11 }}>to</span>
+                      <input type="time" step={900} value={r.weekend.latest} onChange={e => update(a.id, ["weekend", "latest"], e.target.value)} style={timeInput} />
+                    </div>
+                  </td>
+                  <td style={cell}>
+                    <input type="number" min={1} max={3} value={r.maxPerDay ?? 1} onChange={e => update(a.id, ["maxPerDay"], clamp(Number(e.target.value) || 1, 1, 3))} style={{ ...inputStyle, padding: "4px 6px", fontSize: 12, width: 52, textAlign: "center" }} />
+                  </td>
+                  <td style={cell}>
+                    <input type="checkbox" checked={!!r.allowShared} onChange={e => update(a.id, ["allowShared"], e.target.checked)} />
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ padding: "10px 16px", fontSize: 11, color: C.textMuted, borderTop: `1px solid ${C.borderLight}`, lineHeight: 1.5 }}>
+        Start windows are about when a team may <em>take</em> the ice. A U9 team with a 6:15p latest start can skate
+        until 7:05p — it just can't be handed a 6:30p slot.
+      </div>
+      {showHelp && (
+        <Modal title="How the rules are used" onClose={() => setShowHelp(false)} width={480}
+          footer={<button onClick={() => setShowHelp(false)} style={primaryBtn()}>Got it</button>}>
+          <div style={{ fontSize: 13, color: C.text, lineHeight: 1.6 }}>
+            <p style={{ marginBottom: 10 }}><strong>Ice length</strong> — how long one ice time runs for this band. The allocator carves exactly this much out of a purchased block.</p>
+            <p style={{ marginBottom: 10 }}><strong>Weeknight / weekend start</strong> — the earliest and latest a team in this band may be scheduled to <em>start</em>. These are hard: the allocator will leave a request unplaced rather than break one, and hand-edits that break one show up as a conflict.</p>
+            <p style={{ marginBottom: 10 }}><strong>Max/day</strong> — how many ice times one team can be given on the same date. Above this the allocator pays a heavy penalty and validation warns.</p>
+            <p style={{ marginBottom: 10 }}><strong>Shared ice</strong> — whether two teams in this band can be put on the same sheet at the same time (half-ice or cross-ice). Sharing is rewarded, since it doubles what a block of ice buys.</p>
+            <p>Everything else — fairness on prime-time, keeping teams off back-to-back days, home-rink preference, not stranding unusable gaps — is a soft preference the allocator balances rather than a rule it enforces.</p>
+          </div>
+        </Modal>
+      )}
+    </SectionCard>
+  );
+}
+
+// Season-to-date accounting: hours per team, and how the good and bad ice
+// got divided up.
+function UsageReport({ assignments, teams, rinks, rules }) {
+  const [from, setFrom] = useState(SEASON_START);
+  const [to, setTo] = useState(addDays(SEASON_START, 209));
+  const inRange = useMemo(
+    () => assignments.filter(a => a.date >= from && a.date <= to),
+    [assignments, from, to]
+  );
+
+  const rows = useMemo(() => teams.map(t => {
+    const mine = inRange.filter(a => (a.teamIds || []).includes(t.id));
+    const minutes = mine.reduce((n, a) => n + toMin(a.end) - toMin(a.start), 0);
+    const prime = mine.filter(a => slotQuality(a.date, toMin(a.start)) === "prime").length;
+    const rough = mine.filter(a => slotQuality(a.date, toMin(a.start)) === "rough").length;
+    const shared = mine.filter(a => (a.teamIds || []).length > 1).length;
+    return { team: t, sessions: mine.length, minutes, prime, rough, shared };
+  }), [inRange, teams]);
+
+  const maxMinutes = Math.max(1, ...rows.map(r => r.minutes));
+  const totalMinutes = rows.reduce((n, r) => n + r.minutes, 0);
+
+  const rinkRows = useMemo(() => rinks.map(r => {
+    const mine = inRange.filter(a => a.rinkId === r.id);
+    return { rink: r, sessions: mine.length, minutes: mine.reduce((n, a) => n + toMin(a.end) - toMin(a.start), 0) };
+  }), [inRange, rinks]);
+
+  // Warm/cool heat scale, recalibrated to whatever range is on screen.
+  const heat = v => {
+    const p = v / maxMinutes;
+    if (p === 0) return { bg: "transparent", color: C.textLight };
+    if (p < 0.34) return { bg: C.blueLight, color: C.text };
+    if (p < 0.67) return { bg: C.accentLight, color: C.text };
+    return { bg: C.orangeLight, color: C.orangeText };
+  };
+
+  return (
+    <SectionCard
+      title="Usage"
+      subtitle="Hours delivered, and how the prime ice was shared out."
+      right={
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <input type="date" value={from} onChange={e => setFrom(e.target.value)} style={{ ...inputStyle, padding: "4px 6px", fontSize: 12 }} />
+          <span style={{ color: C.textLight, fontSize: 12 }}>to</span>
+          <input type="date" value={to} onChange={e => setTo(e.target.value)} style={{ ...inputStyle, padding: "4px 6px", fontSize: 12 }} />
+        </div>
+      }
+      pad={0}
+    >
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 620 }}>
+          <thead>
+            <tr>
+              <th style={{ ...thStyle, textAlign: "left" }}>Team</th>
+              <th style={{ ...thStyle }}>Ice times</th>
+              <th style={{ ...thStyle }}>Hours</th>
+              <th style={{ ...thStyle }}>Prime</th>
+              <th style={{ ...thStyle }}>Off-peak</th>
+              <th style={{ ...thStyle }}>Shared</th>
+              <th style={{ ...thStyle, width: 140 }}>Share of ice</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map(r => {
+              const h = heat(r.minutes);
+              return (
+                <tr key={r.team.id}>
+                  <td style={{ ...tdStyle, textAlign: "left" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <AgeChip ageGroup={r.team.ageGroup} />
+                      <span style={{ fontSize: 13, fontWeight: 500 }}>{r.team.name}</span>
+                    </div>
+                  </td>
+                  <td style={{ ...tdStyle, textAlign: "center", fontSize: 12 }}>{r.sessions || "—"}</td>
+                  <td style={{ ...tdStyle, textAlign: "center", fontSize: 12, fontWeight: 600, background: h.bg, color: h.color }}>
+                    {r.minutes ? (r.minutes / 60).toFixed(1) : "—"}
+                  </td>
+                  <td style={{ ...tdStyle, textAlign: "center", fontSize: 12, color: r.prime ? C.greenText : C.textLight }}>{r.prime || "—"}</td>
+                  <td style={{ ...tdStyle, textAlign: "center", fontSize: 12, color: r.rough ? C.orangeText : C.textLight }}>{r.rough || "—"}</td>
+                  <td style={{ ...tdStyle, textAlign: "center", fontSize: 12, color: r.shared ? C.blueText : C.textLight }}>{r.shared || "—"}</td>
+                  <td style={{ ...tdStyle, padding: "8px 10px" }}>
+                    <div style={{ height: 8, background: C.borderLight, borderRadius: 4, overflow: "hidden" }}>
+                      <div style={{ height: 8, width: `${Math.round(r.minutes / maxMinutes * 100)}%`, background: C.accent }} />
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div style={{ padding: "12px 16px", borderTop: `1px solid ${C.borderLight}`, display: "flex", gap: 18, flexWrap: "wrap", fontSize: 12, color: C.textMuted }}>
+        <span><strong style={{ color: C.text }}>{(totalMinutes / 60).toFixed(1)}h</strong> delivered in range</span>
+        {rinkRows.filter(r => r.sessions).map(r => (
+          <span key={r.rink.id}>{r.rink.short}: <strong style={{ color: C.text }}>{(r.minutes / 60).toFixed(1)}h</strong></span>
+        ))}
+      </div>
+    </SectionCard>
+  );
+}
+
+function TeamsTab({ teams, setTeams, rinks, setRinks, rules, setRules, assignments }) {
+  const [editingTeam, setEditingTeam] = useState(null);
+  const [editingRink, setEditingRink] = useState(null);
+  const byBand = useMemo(() => {
+    const map = {};
+    for (const t of teams) (map[t.ageGroup] = map[t.ageGroup] || []).push(t);
+    return map;
+  }, [teams]);
+
+  const saveTeam = t => {
+    setTeams(prev => prev.some(x => x.id === t.id) ? prev.map(x => x.id === t.id ? t : x) : [...prev, t]);
+    setEditingTeam(null);
+  };
+  const saveRink = r => {
+    setRinks(prev => prev.some(x => x.id === r.id) ? prev.map(x => x.id === r.id ? r : x) : [...prev, r]);
+    setEditingRink(null);
+  };
+
+  return (
+    <div>
+      <SectionCard
+        title="Teams"
+        subtitle={`${teams.length} teams · ${teams.reduce((n, t) => n + (t.sessionsPerWeek || 0), 0)} ice times a week`}
+        right={<button onClick={() => setEditingTeam({})} style={primaryBtn()}>Add team</button>}
+        pad={0}
+      >
+        {AGE_GROUPS.filter(a => byBand[a.id]?.length).map(a => (
+          <div key={a.id}>
+            <div style={{ padding: "6px 16px", background: BAND_BG[a.id], fontSize: 11, fontWeight: 700, borderBottom: `1px solid ${C.borderLight}` }}>{a.full}</div>
+            {byBand[a.id].map(t => (
+              <div key={t.id} onClick={() => setEditingTeam(t)} style={{
+                padding: "10px 16px", borderBottom: `1px solid ${C.borderLight}`,
+                display: "flex", alignItems: "center", gap: 10, cursor: "pointer", flexWrap: "wrap",
+              }}>
+                <span style={{ fontSize: 13, fontWeight: 600 }}>{t.name}</span>
+                <span style={{ fontSize: 11, color: C.textMuted }}>{t.level}</span>
+                {!!(t.blackoutDows || []).length && (
+                  <span style={{ fontSize: 10, color: C.redText, fontWeight: 600 }}>
+                    no {(t.blackoutDows).map(d => DOW_SHORT[d]).join("/")}
+                  </span>
+                )}
+                {!!(t.blackoutDates || []).length && (
+                  <span style={{ fontSize: 10, color: C.redText, fontWeight: 600 }}>{t.blackoutDates.length} blackout date{t.blackoutDates.length === 1 ? "" : "s"}</span>
+                )}
+                <span style={{ marginLeft: "auto", fontSize: 12, color: C.textMuted }}>
+                  {rinks.find(r => r.id === t.homeRinkId)?.short || "any rink"} · <strong style={{ color: C.text }}>{t.sessionsPerWeek}</strong>/wk
+                </span>
+              </div>
+            ))}
+          </div>
+        ))}
+        {!teams.length && <div style={{ padding: 16, fontSize: 13, color: C.textMuted }}>No teams yet.</div>}
+      </SectionCard>
+
+      <SectionCard
+        title="Rinks"
+        subtitle="The sheets of ice you schedule across."
+        right={<button onClick={() => setEditingRink({})} style={btn()}>Add rink</button>}
+        pad={0}
+      >
+        {rinks.map(r => (
+          <div key={r.id} onClick={() => setEditingRink(r)} style={{
+            padding: "10px 16px", borderBottom: `1px solid ${C.borderLight}`,
+            display: "flex", alignItems: "center", gap: 10, cursor: "pointer",
+          }}>
+            <span style={{ fontSize: 13, fontWeight: 600 }}>{r.name}</span>
+            <span style={{ marginLeft: "auto", fontSize: 12, color: C.textMuted }}>{r.short}</span>
+          </div>
+        ))}
+        {!rinks.length && <div style={{ padding: 16, fontSize: 13, color: C.textMuted }}>No rinks yet.</div>}
+      </SectionCard>
+
+      <RulesEditor rules={rules} setRules={setRules} />
+      <UsageReport assignments={assignments} teams={teams} rinks={rinks} rules={rules} />
+
+      {editingTeam && (
+        <TeamEditorModal team={editingTeam} rinks={rinks} onSave={saveTeam}
+          onDelete={id => { setTeams(prev => prev.filter(t => t.id !== id)); setEditingTeam(null); }}
+          onClose={() => setEditingTeam(null)} />
+      )}
+      {editingRink && (
+        <RinkEditorModal rink={editingRink} onSave={saveRink}
+          onDelete={id => { setRinks(prev => prev.filter(r => r.id !== id)); setEditingRink(null); }}
+          onClose={() => setEditingRink(null)} />
+      )}
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════
+// BACKUP / RESTORE
+// The manual escape hatch, independent of whether cloud sync is on.
+// ══════════════════════════════════════════════════
+function BackupModal({ snapshot, onRestore, onClose }) {
+  const fileRef = useRef(null);
+  const [pending, setPending] = useState(null);
+  const [err, setErr] = useState("");
+
+  const doExport = () => {
+    downloadBlob(`ice-data-${dateStr(new Date())}.json`, JSON.stringify(snapshot, null, 2), "application/json");
+  };
+  const onFile = e => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const parsed = JSON.parse(reader.result);
+        if (!parsed || typeof parsed !== "object") throw new Error("not an object");
+        setPending(parsed); setErr("");
+      } catch (ex) {
+        setErr("That file isn't a valid backup.");
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = "";
+  };
+
+  return (
+    <Modal title="Data backup" onClose={onClose} width={460}
+      footer={<button onClick={onClose} style={btn()}>Close</button>}>
+      <div style={{ fontSize: 13, color: C.text, lineHeight: 1.55, marginBottom: 14 }}>
+        A snapshot of everything: rinks, teams, purchased ice, the schedule, and the age-group rules.
+      </div>
+      <div style={{ borderTop: `1px solid ${C.borderLight}`, paddingTop: 14 }}>
+        <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>Download</div>
+        <button onClick={doExport} style={btn()}>Download ice-data.json</button>
+      </div>
+      <div style={{ borderTop: `1px solid ${C.borderLight}`, paddingTop: 14, marginTop: 14 }}>
+        <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 6 }}>Restore</div>
+        <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 8, lineHeight: 1.5 }}>
+          Overwrites everything currently loaded. If cloud sync is on, it overwrites it for everyone.
+        </div>
+        <input ref={fileRef} type="file" accept="application/json,.json" onChange={onFile} style={{ display: "none" }} />
+        <button onClick={() => fileRef.current?.click()} style={btn()}>{"Choose file…"}</button>
+        {pending && (
+          <div style={{ marginTop: 12, background: C.orangeLight, border: `1px solid ${C.orange}`, borderRadius: 8, padding: "10px 12px" }}>
+            <div style={{ fontSize: 12, color: C.orangeText, marginBottom: 8, lineHeight: 1.5 }}>
+              Ready to restore {(pending.teams || []).length} teams, {(pending.slots || []).length} ice blocks,
+              and {(pending.assignments || []).length} scheduled ice times.
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button onClick={() => setPending(null)} style={smallBtn()}>Cancel</button>
+              <button onClick={() => { onRestore(pending); setPending(null); }} style={{ ...smallBtn(), background: C.accent, borderColor: C.accent, color: C.onAccent, fontWeight: 600 }}>Restore</button>
+            </div>
+          </div>
+        )}
+        {err && <div style={{ marginTop: 10, fontSize: 12, color: C.redText }}>{err}</div>}
+      </div>
+    </Modal>
+  );
+}
+
+// ══════════════════════════════════════════════════
+// APP
+// ══════════════════════════════════════════════════
+function App() {
+  const [hydrated, setHydrated] = useState(false);
+  const [cloudState, setCloudState] = useState({ mode: "checking", message: "" });
+  const [theme, setTheme] = useState(() => {
+    try { return localStorage.getItem("ice_theme") || "light"; } catch { return "light"; }
+  });
+  const [tab, setTab] = useState("ice");
+  const [weekStart, setWeekStart] = useState(initialWeekStart);
+
+  const [rinks, setRinksRaw] = useState(DEFAULT_RINKS);
+  const [teams, setTeamsRaw] = useState(DEFAULT_TEAMS);
+  const [slots, setSlotsRaw] = useState([]);
+  const [assignments, setAssignmentsRaw] = useState([]);
+  const [rules, setRulesRaw] = useState(DEFAULT_RULES);
+  const [meta, setMetaRaw] = useState({ publishedWeeks: [], version: DATA_VERSION });
+
+  const [requestOverrides, setRequestOverrides] = useState({});
+  const [lastResult, setLastResult] = useState(null);
+  const [backupOpen, setBackupOpen] = useState(false);
+  const [gate, setGate] = useState(null);   // { action, run }
+  const readyRef = useRef(false);
+
+  // Persisting setters: accept a value or an updater, mirror to storage.
+  const persist = (key, setter) => next => setter(prev => {
+    const value = typeof next === "function" ? next(prev) : next;
+    if (readyRef.current) save(key, value);
+    return value;
+  });
+  const setRinks       = useCallback(persist("ice_rinks", setRinksRaw), []);
+  const setTeams       = useCallback(persist("ice_teams", setTeamsRaw), []);
+  const setSlots       = useCallback(persist("ice_slots", setSlotsRaw), []);
+  const setAssignments = useCallback(persist("ice_assignments", setAssignmentsRaw), []);
+  const setRules       = useCallback(persist("ice_rules", setRulesRaw), []);
+  const setMeta        = useCallback(persist("ice_meta", setMetaRaw), []);
+
+  useEffect(() => { applyTheme(theme); }, []);
+
+  // ── Hydration. Try the cloud; fall back to this device without fuss.
+  useEffect(() => {
+    let alive = true;
+    onCloudResult = r => {
+      if (!alive) return;
+      if (r.ok) setCloudState({ mode: "cloud", message: "", at: Date.now() });
+      else setCloudState({ mode: "error", message: r.message });
+    };
+    hydrateFromCloud().then(res => {
+      if (!alive) return;
+      setCloudState(res.ok ? { mode: "cloud", message: "", at: Date.now() } : { mode: "local", message: res.reason });
+
+      const loadedSlots = load("ice_slots", null);
+      setRinksRaw(load("ice_rinks", DEFAULT_RINKS));
+      setTeamsRaw(load("ice_teams", DEFAULT_TEAMS));
+      setSlotsRaw(loadedSlots ?? buildSeedSlots(4));
+      setAssignmentsRaw(load("ice_assignments", []));
+      setRulesRaw({ ...DEFAULT_RULES, ...load("ice_rules", {}) });
+      setMetaRaw(load("ice_meta", { publishedWeeks: [], version: DATA_VERSION }));
+      readyRef.current = true;
+      // A first-run device has no stored ice; write the seed so everyone
+      // starts from the same place.
+      if (!loadedSlots) save("ice_slots", buildSeedSlots(4));
+      setHydrated(true);
+    });
+    return () => { alive = false; onCloudResult = () => {}; };
+  }, []);
+
+  const toggleTheme = () => {
+    const next = theme === "dark" ? "light" : "dark";
+    setTheme(next);
+    applyTheme(next);
+    try { localStorage.setItem("ice_theme", next); } catch {}
+    document.body.style.background = next === "dark" ? C_DARK.bg : C_LIGHT.bg;
+  };
+  useEffect(() => { document.body.style.background = C.bg; }, [theme, hydrated]);
+
+  const publishedWeeks = meta.publishedWeeks || [];
+  const isFinalized = publishedWeeks.includes(weekStart);
+
+  // ── Allocate.
+  const handleGenerate = ({ keepExisting, requests }) => {
+    const dates = Array.from({ length: 7 }, (_, i) => addDays(weekStart, i));
+    const weekSlots = slots.filter(s => dates.includes(s.date) && !s.blocked);
+    const existing = assignments.filter(a => dates.includes(a.date));
+    const locked = keepExisting ? existing.map(a => ({ ...a })) : [];
+
+    // Anything the caller asked for that's already covered by kept ice
+    // shouldn't be requested twice.
+    let effective = requests;
+    if (keepExisting) {
+      const covered = {};
+      for (const a of locked) for (const tid of a.teamIds || []) covered[tid] = (covered[tid] || 0) + 1;
+      effective = [];
+      const used = {};
+      for (const r of requests) {
+        used[r.teamId] = (used[r.teamId] || 0) + 1;
+        if (used[r.teamId] <= (covered[r.teamId] || 0)) continue;
+        effective.push(r);
+      }
+    }
+
+    const sol = solveSchedule({ teams, slots: weekSlots, rules, requests: effective, locked, runs: 60, seed: Math.floor(Math.random() * 100000) });
+    setAssignments([...assignments.filter(a => !dates.includes(a.date)), ...sol.assignments]);
+    const teamMap = Object.fromEntries(teams.map(t => [t.id, t]));
+    setLastResult({
+      weekStart,
+      placed: sol.assignments.length,
+      runs: sol.runs,
+      unplaced: sol.unplaced.map(u => ({ ...u, teamName: teamMap[u.teamId]?.name || u.teamId })),
+    });
+    setTab("schedule");
+  };
+
+  const togglePublish = () => {
+    const action = isFinalized ? `Unpublish ${weekLabel(weekStart)}` : `Publish ${weekLabel(weekStart)}`;
+    setGate({
+      action,
+      run: () => {
+        setMeta(m => ({
+          ...m,
+          publishedWeeks: isFinalized
+            ? (m.publishedWeeks || []).filter(w => w !== weekStart)
+            : Array.from(new Set([...(m.publishedWeeks || []), weekStart])),
+        }));
+        setGate(null);
+      },
+    });
+  };
+
+  const snapshot = { version: DATA_VERSION, rinks, teams, slots, assignments, rules, meta };
+  const restore = data => {
+    setGate({
+      action: "Restore a backup over the current data",
+      run: () => {
+        if (data.rinks) setRinks(data.rinks);
+        if (data.teams) setTeams(data.teams);
+        if (data.slots) setSlots(data.slots);
+        if (data.assignments) setAssignments(data.assignments);
+        if (data.rules) setRules({ ...DEFAULT_RULES, ...data.rules });
+        if (data.meta) setMeta(data.meta);
+        setGate(null);
+        setBackupOpen(false);
+      },
+    });
+  };
+
+  const tabs = [
+    { id: "ice",      label: "Ice",         shortLabel: "Ice" },
+    { id: "allocate", label: "Allocate",    shortLabel: "Build" },
+    { id: "schedule", label: "Schedule",    shortLabel: "Sched" },
+    { id: "teams",    label: "Teams & Rules", shortLabel: "Teams" },
+  ];
+
+  if (!hydrated) {
+    return (
+      <div style={{ background: C.bg, minHeight: "100vh", fontFamily: FONT, color: C.textMuted, display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <div style={{ fontSize: 14 }}>Loading ice schedule…</div>
+      </div>
+    );
+  }
+
+  const syncTone = cloudState.mode === "error" ? { c: C.redText, dot: C.red, text: "Sync error" }
+                 : cloudState.mode === "cloud" ? { c: C.greenText, dot: C.green, text: "Synced" }
+                 : cloudState.mode === "local" ? { c: C.textMuted, dot: C.border, text: "Local only" }
+                 : { c: C.textMuted, dot: C.border, text: "Checking…" };
+
+  return (
+    <div style={{ background: C.bg, minHeight: "100vh", fontFamily: FONT, color: C.text }}>
+      <div style={{ background: C.surface, borderBottom: `1px solid ${C.border}`, padding: "16px 20px", display: "flex", alignItems: "center", boxShadow: "0 1px 3px rgba(0,0,0,0.04)" }}>
+        <span style={{ fontFamily: DISPLAY, fontSize: 22, fontWeight: 700, color: C.accent }}>Ice Scheduler</span>
+        <span style={{ fontSize: 12, color: C.textMuted, fontWeight: 500, marginLeft: 10 }}>2026–27</span>
+        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 8 }}>
+          <span title={cloudState.mode === "local" ? `Cloud sync is off (${cloudState.message}) — this device only.` : cloudState.message || "Shared schedule"}
+                style={{ fontSize: 11, fontWeight: 600, color: syncTone.c, display: "flex", alignItems: "center", gap: 4 }}>
+            <span style={{ width: 7, height: 7, borderRadius: "50%", display: "inline-block", background: syncTone.dot }} />
+            <span>{syncTone.text}</span>
+          </span>
+          <button onClick={toggleTheme} title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"} style={{
+            fontSize: 14, color: C.textMuted, background: "transparent",
+            border: `1px solid ${C.border}`, cursor: "pointer",
+            padding: "4px 8px", borderRadius: 4, lineHeight: 1, fontFamily: FONT,
+          }}>{theme === "dark" ? "☀" : "☾"}</button>
+          <button onClick={() => setBackupOpen(true)} title="Data backup (export / restore)" style={{
+            fontSize: 14, color: C.textMuted, background: "transparent",
+            border: `1px solid ${C.border}`, cursor: "pointer",
+            padding: "4px 8px", borderRadius: 4, lineHeight: 1, fontFamily: FONT,
+          }}>{"⚙"}</button>
+        </div>
+      </div>
+
+      <div style={{ display: "flex", background: C.surface, borderBottom: `1px solid ${C.border}`, overflowX: "auto" }}>
+        {tabs.map(t => (
+          <button key={t.id} onClick={() => setTab(t.id)} style={{
+            flex: 1, padding: "12px 0", background: "transparent",
+            color: tab === t.id ? C.accent : C.textMuted, border: "none",
+            borderBottom: tab === t.id ? `2px solid ${C.accent}` : "2px solid transparent",
+            fontFamily: FONT, fontSize: 13, fontWeight: tab === t.id ? 600 : 500,
+            cursor: "pointer", whiteSpace: "nowrap", minWidth: 70,
+          }}>
+            <span className="tab-desktop">{t.label}</span>
+            <span className="tab-mobile">{t.shortLabel || t.label}</span>
+          </button>
+        ))}
+      </div>
+
+      <div style={{ maxWidth: 1040, margin: "0 auto", padding: "20px 16px" }}>
+        {cloudState.mode === "error" && (
+          <div style={{ background: C.redLight, border: `1px solid ${C.red}`, borderRadius: 8, padding: "12px 16px", marginBottom: 16, fontSize: 13, color: C.redText, lineHeight: 1.4 }}>
+            <strong>Couldn't save to the shared schedule</strong> — changes are only on this device until this clears. ({cloudState.message})
+          </div>
+        )}
+
+        {tab === "ice" && (
+          <IceTab slots={slots} setSlots={setSlots} assignments={assignments} rinks={rinks} teams={teams} />
+        )}
+        {tab === "allocate" && (
+          <AllocateTab
+            weekStart={weekStart} setWeekStart={setWeekStart}
+            teams={teams} rinks={rinks} slots={slots} assignments={assignments} rules={rules}
+            requestOverrides={requestOverrides} setRequestOverrides={setRequestOverrides}
+            onGenerate={handleGenerate} lastResult={lastResult} isFinalized={isFinalized} />
+        )}
+        {tab === "schedule" && (
+          <ScheduleTab
+            weekStart={weekStart} setWeekStart={setWeekStart}
+            assignments={assignments} setAssignments={setAssignments}
+            teams={teams} rinks={rinks} slots={slots} rules={rules}
+            isFinalized={isFinalized} onTogglePublish={togglePublish} />
+        )}
+        {tab === "teams" && (
+          <TeamsTab teams={teams} setTeams={setTeams} rinks={rinks} setRinks={setRinks}
+            rules={rules} setRules={setRules} assignments={assignments} />
+        )}
+
+        <div style={{ textAlign: "center", fontSize: 11, color: C.textLight, padding: "24px 0 8px" }}>
+          {cloudState.mode === "local"
+            ? "Running on this device only — see ICE_HANDOFF.md to turn on shared sync."
+            : "Shared schedule · everyone with the link sees the same board."}
+        </div>
+      </div>
+
+      {backupOpen && <BackupModal snapshot={snapshot} onRestore={restore} onClose={() => setBackupOpen(false)} />}
+      <EditGate open={!!gate} action={gate?.action} onConfirm={() => gate?.run()} onCancel={() => setGate(null)} />
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+  </script>
+</body>
+</html>

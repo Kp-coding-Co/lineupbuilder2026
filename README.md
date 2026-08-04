@@ -52,9 +52,41 @@ Settings now only holds a manual backup tool, independent of the live sync:
 - **Download team-data.json** — exports the current shared data as a JSON snapshot, for your own safekeeping.
 - **Choose file…** — restores a backup JSON file, overwriting the shared cloud data for every coach. Gated by the passphrase + confirmation.
 
+## Ice Scheduler (`ice.html`)
+
+A second app in the same repo, built from this one's interface but pointed at a different
+problem: allocating **multiple teams into ice-time openings across multiple rinks**.
+
+**Live site:** <https://kp-coding-co.github.io/lineupbuilder2026/ice.html>
+
+Same shape as the lineup builder — single self-contained HTML file, four tabs, dark mode,
+a constraint solver behind one big button — with hockey's constraints in place of baseball's:
+
+- **Ice** — calendar of every block of ice the association has purchased, per rink. Add
+  blocks singly or as a recurring weekly pattern. Mark blocks blocked for tournaments or
+  public skates.
+- **Allocate** — pick a week, set who needs how much ice, and the allocator fills the
+  blocks. It respects each age group's **ice length** and **earliest/latest start times**
+  (separately for weeknights and weekends) as hard rules, shares half-ice between the
+  youngest bands where allowed, spreads prime-time and off-peak ice fairly across teams,
+  keeps teams off back-to-back days, and avoids leaving gaps too short for anyone to use.
+  Anything it can't place is listed with the reason.
+- **Schedule** — the week board, day by day and rink by rink, with open gaps shown inline.
+  Swap two teams, drop a team into an open gap, nudge a start time, undo/redo/reset,
+  publish. Conflict detection is live. Exports: printable sheet, CSV, and .ics calendar
+  files (whole association or one team).
+- **Teams & Rules** — teams with weekly targets, home rinks and blackout dates; the rinks
+  list; the editable age-group rule matrix; and a season usage report showing hours per
+  team and how the prime ice got divided.
+
+Runs local-only out of the box. Shared cloud sync turns on once the `ice_data` table
+exists — see `ICE_HANDOFF.md` for the one-time SQL and the rest of the engineering notes.
+
 ## Files
 
-- `index.html` — the app
+- `index.html` — the lineup app
+- `ice.html` — the ice scheduler
+- `ICE_HANDOFF.md` — engineering handoff for the ice scheduler
 - `archive/` — older versions, design mocks, and sample game-day exports kept for reference
 - `HANDOFF.md` — engineering handoff doc: data model, code locations, anti-footguns
 - `NEXT_PHASE_BRIEF.md` — brief for a future Vite/normalized-DB rebuild. Kept for reference; not pursued.
