@@ -220,6 +220,25 @@ Actual assignments last 15 games rated against each player's declared `positionM
 That last bucket is 13 innings the engine would refuse to generate and flags as a
 high-severity warning after the fact. The map is describing a roster from May.
 
+**Applied 2026-08-13** — the refreshed map is in `team-data.json` and `DEFAULT_ROSTER`.
+The bands used, by innings logged at the position across the last 15 games:
+
+| Innings | Meaning | Tier |
+|---|---|---|
+| 30+ | co-owner of the position | `preferred`, ranked by innings |
+| 8–29 | designated backup | `secondary`, ranked by innings |
+| 1–7 | spot fill | `emergency` |
+| 0 | dropped from the map | — |
+
+That threshold is slightly more generous than the share-based reading first sketched
+below: Mack and Henry land at `secondary` rather than `emergency` in CF (9 innings each
+≈ 0.6/game, which is real backup duty), and Cullen keeps a `preferred` slot at SS as
+`preferred:2` on 34 innings, matching how Jude at 1B and Henry at 2B are treated.
+
+After the refresh, **every assignment in the last 15 games is representable** — the
+off-map bucket goes from 13 innings to 0, and tier compliance reads 74.8% preferred /
+19.7% secondary / 5.5% emergency.
+
 Concrete corrections implied by usage:
 
 | Player | Change | Evidence |
@@ -274,9 +293,11 @@ a code call** — it should be changed deliberately, not inferred.
 
 ## Suggested implementation order
 
-1. **Refresh the data first.** Apply the Pattern 9 `positionMap` corrections and populate
-   `benchTiers` from observed sits/game. Roughly half the gap between engine output and
-   coach output is stale inputs, not bad logic — and this step needs no engine change.
+1. ~~**Refresh the data first.**~~ **Done 2026-08-13.** `positionMap` re-derived from
+   usage and `benchTiers` populated from observed sits/game, in both `team-data.json`
+   (the restore file) and `DEFAULT_ROSTER` / `DEFAULT_BENCH_TIERS` in `index.html`.
+   `ROSTER_VERSION` was deliberately not bumped — see the comment above it for why.
+   **To land this on the live app: ⚙ → Restore from backup, using `team-data.json`.**
 2. **Promote home-position continuity** from tiebreaker to dominant term in `fieldScore`,
    at a weight above the scarcity bonuses. This is the single highest-leverage change.
 3. **Reframe bench fairness as tiered targets** — replace the flat `spread ≤ 2` gate in
