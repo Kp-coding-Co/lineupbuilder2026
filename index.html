@@ -211,14 +211,16 @@ BENCH_TIERS.forEach(t => { BENCH_TIER_MAP[t.id] = t; });
 // branches in the bench-balance pass simply never trigger.
 BENCH_TIER_MAP.iron = BENCH_TIER_MAP.regular;
 const DEFAULT_BENCH_TIER = "regular";
-// Hardcoded bench tiers for the current roster. Dev players (Kaden, Henry, Elliott)
-// sit the most; Flex (Owen, Clay) sit moderately; everyone else is Regular.
+// Bench tiers for the current roster, derived from actual sits/game across the
+// last 15 games of 2026 (see LINEUP-PATTERNS.md, Pattern 02). Threshold: a player
+// averaging 2.0+ sits per game is Reduced ("flex"), everyone else is Regular.
+// Nobody currently earns Limited ("dev") — the observed range tops out at 2.60.
+// Players not listed fall through to DEFAULT_BENCH_TIER.
 const DEFAULT_BENCH_TIERS = {
-  "11": "dev",     // Kaden
-  "6":  "dev",     // Henry
-  "8":  "dev",     // Elliott
-  "5":  "flex",    // Owen
-  "7":  "flex",    // Clay
+  "4":  "flex",    // Reed  — 2.60 sits/game
+  "5":  "flex",    // Owen  — 2.53
+  "6":  "flex",    // Henry — 2.07
+  "7":  "flex",    // Clay  — 2.00
 };
 
 // Summary color coding
@@ -242,6 +244,14 @@ const CAT_COLORS = {
 // Bare tier (e.g. "preferred") is treated as rank 1. Rank only matters where a
 // position has multiple players at the same tier; it's omitted otherwise.
 // Bump ROSTER_VERSION whenever DEFAULT_ROSTER changes so localStorage auto-resets.
+//
+// Deliberately NOT bumped for the 2026-08-13 position-map refresh. Cloud
+// hydration is the source of truth for a live team (see the hydrateFromCloud
+// effect — it calls setRoster with the team_data row and wins over anything
+// seeded here), so a bump would be a no-op on the live app while risking a
+// push of DEFAULT_ROSTER to the shared row if hydration ever fails. The
+// refreshed roster reaches production through ⚙ → Restore from backup using
+// the team-data.json committed alongside this file.
 const ROSTER_VERSION = 3;
 
 // One-time wipe of stale per-game data (schedule entries, pitch logs, the
@@ -260,20 +270,28 @@ const DATA_VERSION = 1;
     }
   } catch (e) {}
 })();
+// Position maps re-derived from actual usage across the last 15 games of 2026
+// (see LINEUP-PATTERNS.md, Pattern 09). Tier bands, by innings logged at the
+// position over that stretch:
+//   30+   co-owner of the position  → preferred (rank by innings)
+//   8–29  designated backup         → secondary (rank by innings)
+//   1–7   spot fill                 → emergency
+//   0     dropped from the map
+// Every player pitched over the stretch, so P stays preferred for all of them.
+// Kaden (id 11) is off the roster and has been removed.
 const DEFAULT_ROSTER = [
-  { id:"1",  name:"Benji",    number:"8",  positionMap:{ P:"preferred",SS:"preferred","1B":"secondary:2",C:"emergency:1" } },
-  { id:"2",  name:"Everett",  number:"7",  positionMap:{ P:"preferred","3B":"preferred",SS:"secondary:1",CF:"secondary:1" } },
-  { id:"3",  name:"Jude",     number:"11", positionMap:{ P:"preferred","1B":"secondary:1",CF:"secondary:3",SS:"secondary:4" } },
-  { id:"4",  name:"Reed",     number:"2",  positionMap:{ P:"preferred","1B":"preferred","3B":"secondary:2" } },
-  { id:"5",  name:"Owen",     number:"16", positionMap:{ P:"preferred",LF:"preferred",RF:"secondary" } },
-  { id:"6",  name:"Henry",    number:"17", positionMap:{ P:"preferred","3B":"emergency",LF:"secondary",RF:"secondary" } },
-  { id:"7",  name:"Clay",     number:"3",  positionMap:{ P:"preferred",RF:"preferred",LF:"secondary" } },
-  { id:"8",  name:"Elliott",  number:"44", positionMap:{ P:"preferred",LF:"secondary",RF:"secondary" } },
-  { id:"9",  name:"Cullen",   number:"28", positionMap:{ P:"preferred",CF:"preferred",C:"secondary","2B":"secondary:1",SS:"secondary:3" } },
-  { id:"10", name:"Mack",     number:"24", positionMap:{ P:"preferred",C:"preferred:2","2B":"secondary:2",LF:"secondary",CF:"secondary:2",RF:"secondary" } },
-  { id:"11", name:"Kaden",    number:"88", positionMap:{ LF:"emergency",RF:"emergency" } },
-  { id:"12", name:"Mason",    number:"9",  positionMap:{ P:"preferred",C:"preferred:1","3B":"secondary:1",LF:"secondary" } },
-  { id:"13", name:"Strachan", number:"15", positionMap:{ P:"preferred","2B":"preferred",SS:"secondary:2",C:"emergency:2" } },
+  { id:"1",  name:"Benji",    number:"8",  positionMap:{ P:"preferred",C:"secondary:3","1B":"emergency",SS:"preferred:1" } },
+  { id:"2",  name:"Everett",  number:"7",  positionMap:{ P:"preferred","3B":"emergency",SS:"emergency",LF:"emergency",CF:"preferred" } },
+  { id:"3",  name:"Jude",     number:"11", positionMap:{ P:"preferred","1B":"preferred:2",SS:"emergency",CF:"emergency",RF:"emergency" } },
+  { id:"4",  name:"Reed",     number:"2",  positionMap:{ P:"preferred","1B":"preferred:1",RF:"emergency" } },
+  { id:"5",  name:"Owen",     number:"16", positionMap:{ P:"preferred","2B":"emergency",LF:"preferred" } },
+  { id:"6",  name:"Henry",    number:"17", positionMap:{ P:"preferred","2B":"preferred:2",LF:"emergency",CF:"secondary:2",RF:"secondary:2" } },
+  { id:"7",  name:"Clay",     number:"97", positionMap:{ P:"preferred",CF:"emergency",RF:"preferred" } },
+  { id:"8",  name:"Elliott",  number:"44", positionMap:{ P:"preferred","3B":"preferred",RF:"emergency" } },
+  { id:"9",  name:"Cullen",   number:"28", positionMap:{ P:"preferred",C:"secondary:1","1B":"emergency",SS:"preferred:2",LF:"secondary:2",CF:"secondary:1",RF:"emergency" } },
+  { id:"10", name:"Mack",     number:"24", positionMap:{ P:"preferred",C:"secondary:2","2B":"emergency",LF:"secondary:1",CF:"secondary:3",RF:"secondary:1" } },
+  { id:"12", name:"Mason",    number:"9",  positionMap:{ P:"preferred",C:"preferred","3B":"secondary",LF:"emergency" } },
+  { id:"13", name:"Strachan", number:"15", positionMap:{ P:"preferred","2B":"preferred:1",SS:"emergency",CF:"emergency" } },
 ];
 
 // ══════════════════════════════════════════════════
