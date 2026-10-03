@@ -1,5 +1,5 @@
 {
-  "publishedAt": 1786572192839,
+  "publishedAt": 1791048215880,
   "roster": [
     {
       "id": "4",
@@ -9,18 +9,6 @@
         "P": "preferred",
         "1B": "preferred:1",
         "RF": "emergency"
-      }
-    },
-    {
-      "id": "2",
-      "name": "Everett",
-      "number": "7",
-      "positionMap": {
-        "P": "preferred",
-        "3B": "emergency",
-        "SS": "emergency",
-        "LF": "emergency",
-        "CF": "preferred"
       }
     },
     {
@@ -66,16 +54,6 @@
         "2B": "preferred:1",
         "SS": "emergency",
         "CF": "emergency"
-      }
-    },
-    {
-      "id": "5",
-      "name": "Owen",
-      "number": "16",
-      "positionMap": {
-        "P": "preferred",
-        "2B": "emergency",
-        "LF": "preferred"
       }
     },
     {
@@ -135,6 +113,28 @@
         "P": "preferred",
         "CF": "emergency",
         "RF": "preferred"
+      }
+    },
+    {
+      "id": "14",
+      "name": "Noah",
+      "number": "64",
+      "positionMap": {
+        "P": "preferred",
+        "3B": "emergency",
+        "LF": "secondary",
+        "CF": "secondary",
+        "RF": "secondary"
+      }
+    },
+    {
+      "id": "15",
+      "name": "Alexey",
+      "number": "7",
+      "positionMap": {
+        "P": "preferred",
+        "LF": "secondary",
+        "RF": "secondary"
       }
     }
   ],
@@ -6272,10 +6272,8 @@
   ],
   "benchTiers": {
     "1": "regular",
-    "2": "regular",
     "3": "regular",
     "4": "flex",
-    "5": "flex",
     "6": "flex",
     "7": "flex",
     "8": "regular",
